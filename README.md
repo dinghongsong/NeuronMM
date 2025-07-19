@@ -1,3 +1,7 @@
+## SVD-Flash
+
+![SVD-Flash: Efficient LLM inference via SVD Compression and Tiling on AWS Trainium](./svd_flashimages/.png)
+
 ## Setup Steps
 
 1. Launch a Tranium instance using [AWS EC2](https://us-west-2.console.aws.amazon.com/ec2/home?region=us-west-2#LaunchInstances:) with the following settings:  
