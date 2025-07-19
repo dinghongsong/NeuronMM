@@ -23,6 +23,8 @@ from torch_neuronx.xla_impl.ops import nki_jit  # noqa: E402
 from neuronx_distributed_inference.modules.attention.utils import transpose_parallel_linear_layer
 from neuronx_distributed_inference.modules.lora_serving.lora_module import is_lora_module
 
+from models.nki_kernels import XUV_matmul
+
 logger = logging.getLogger("Neuron")
 
 _traced_qkv_kernel = nki_jit()(rmsnorm_qkv_isa_kernel)

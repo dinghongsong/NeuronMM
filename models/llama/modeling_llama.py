@@ -75,9 +75,12 @@ from modules.flashdecode.utils import calculate_num_cores_per_group
 from modules.lora_serving.lora_module import is_lora_module
 from utils.distributed import get_tp_group
 
+from models.nki_kernels import XUV_matmul
+
 _LLAMA_MODULE_MAP = {}
 
 logger = logging.getLogger("Neuron")
+
 
 
 def get_rmsnorm_cls():
@@ -761,13 +764,19 @@ class NeuronLlamaMLP(nn.Module):
         logger.debug(f"MLP output shape {output.shape}")
         return output
 
-    def _svd_mlp(self, x, adapter_ids=None):
+    def _svd_mlp(self, x):
 
         logger.info("-"*30 + " svd-flash mlp " + "-"*30)
 
         up = self.up_u_proj(self.up_v_proj(x))
         gate = self.gate_u_proj(self.gate_v_proj(x))
         return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
+    
+    def _svd_flash_mlp(self, x):
+
+        logger.info("-"*30 + " svd-flash mlp " + "-"*30)
+        b, s, h = x.shape
+        return XUV_matmul(x.view(-1, h), self.up_v_proj.weight, self.up_u_proj.weight)  # TODO: Fix tiles padding
 
 
     def forward(self, x, rmsnorm=None, residual=None, adapter_ids=None):
@@ -790,7 +799,9 @@ class NeuronLlamaMLP(nn.Module):
             # No kernel
             assert rmsnorm is None and residual is None
             # return (self._native_mlp(x, adapter_ids=adapter_ids), None)
-            return (self._svd_mlp(x, adapter_ids=adapter_ids), None)
+            return (self._svd_mlp(x), None)
+            # return (self._svd_flash_mlp(x), None)
+        
 
 
 @register_module("NeuronLlamaAttention")
