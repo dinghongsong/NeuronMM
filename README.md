@@ -12,7 +12,7 @@
    ```bash
    source /opt/aws_neuronx_venv_pytorch_2_7_nxd_inference/bin/activate
 
-3. Download Llama-3.2-1B from Hugging face
+3. Download `Llama-3.2-1B` from Hugging face
     ``` 
     mkdir models
 
@@ -49,7 +49,7 @@
     --prompt "The color of the sky is" \
     --compress-ratio 0.8
 
-6. The following modifications are needed for LlamaAttention and LlamaMLP in the transformers.models.llama.modeling_llama.py module:
+6. The following modifications are needed for `LlamaAttention` and `LlamaMLP` in the `transformers.models.llama.modeling_llama.py` module:
 ```
 
 class LlamaAttention(nn.Module):
