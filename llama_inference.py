@@ -608,7 +608,6 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
 
     print('-' * 90)
     print("model: ", args.model_path)
-    print("benchmark_sampling: ")
     report = benchmark_sampling(model, None, generation_config, benchmark_report_path=None)
     with open("/home/ubuntu/SVD-Flash/output.log", "a") as f:
         print('-' * 90, file=f)
@@ -709,7 +708,12 @@ if __name__ == "__main__":
     report_wo_svd = run_inference(NeuronLlamaForCausalLM, args, svd=False)
     svd_flash(args)
     report_svd = run_inference(NeuronLlamaForCausalLM, args, svd=True)
+    
     print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"])
     print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"])
-    print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"] )
-
+    print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"])
+    with open("/home/ubuntu/SVD-Flash/output.log", "a") as f:
+        print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"], file=f)
+        print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"], file=f)
+        print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"], file=f)
+    
