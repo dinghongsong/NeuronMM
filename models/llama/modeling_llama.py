@@ -976,7 +976,41 @@ def nki_mm(x, up_v_proj, up_u_proj,
 
 ##############################################
 
-class NeuronLlamaMLP(nn.Module):
+
+class SVD_LlamaMLP(nn.Module):
+    def __init__(self, config, compress_ratio=0.8):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        self.act_fn = ACT2FN[config.hidden_act]
+
+        ######### original
+        # self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        # self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        # self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+
+        low_rank = math.ceil(self.intermediate_size * self.hidden_size * compress_ratio / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+
+        self.gate_v_proj = nn.Linear(self.hidden_size, low_rank, bias=config.mlp_bias)
+        self.gate_u_proj = nn.Linear(low_rank, self.intermediate_size, bias=config.mlp_bias)
+
+        self.up_v_proj = nn.Linear(self.hidden_size, low_rank, bias=config.mlp_bias)
+        self.up_u_proj = nn.Linear(low_rank, self.intermediate_size, bias=config.mlp_bias)
+
+        self.down_v_proj = nn.Linear(self.intermediate_size, low_rank, bias=config.mlp_bias)
+        self.down_u_proj = nn.Linear(low_rank, self.hidden_size, bias=config.mlp_bias)
+        
+
+    def forward(self, x):
+
+        up = self.up_u_proj(self.up_v_proj(x))
+        gate = self.gate_u_proj(self.gate_v_proj(x))
+        return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
+    
+
+
+class NeuronLlamaMLP_SVD(nn.Module):
     """
     This class just replace the linear layers (gate_proj, up_proj and down_proj) with column and row parallel layers
     """
@@ -1005,7 +1039,8 @@ class NeuronLlamaMLP(nn.Module):
         mlp_bias = getattr(config, "mlp_bias", False)
 
         ############################################ SVD-Flash
-        self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
+        # self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
+        self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
 
         ############################################
         if self.neuron_config.quantized_mlp_kernel_enabled and self.quantize_clamp_bound == float(
@@ -1646,7 +1681,7 @@ def nki_matmul_fully_optimized_(
 
 
 ###################################################
-class NeuronLlamaMLP_Ori(nn.Module):
+class NeuronLlamaMLP(nn.Module):
     """
     This class just replace the linear layers (gate_proj, up_proj and down_proj) with column and row parallel layers
     """
@@ -2227,9 +2262,9 @@ class NeuronLlamaDecoderLayer(nn.Module):
 
         self.config = config
         if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
-            self.mlp = NeuronLlamaMLP(config)
+            self.mlp = NeuronLlamaMLP_SVD(config)
         else:
-            self.mlp = NeuronLlamaMLP_Ori(config)
+            self.mlp = NeuronLlamaMLP(config)
 
         logger.debug(
             f"Instantiating RMSNorm modules with hidden size {config.hidden_size} and EPS {config.rms_norm_eps}"
@@ -2549,7 +2584,10 @@ class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
 
     @staticmethod
     def update_state_dict_for_tied_weights(state_dict):
+        # print(self.config.metadata)
+        print(list(state_dict.keys()))
         state_dict["lm_head.weight"] = state_dict["embed_tokens.weight"].clone()
+        # state_dict["embed_tokens.weight"] = state_dict["lm_head.weight"].clone()
 
     @classmethod
     def get_config_cls(cls):

@@ -5,7 +5,6 @@ __pycache__/
 venv/
 
 *.log
-
-
+neuronxcc-*
 *.pt
 *.safetensors

@@ -56,6 +56,7 @@
     --top-k 1 \
     --pad-token-id 2 \
     --prompt "I believe the meaning of life is" \
-    --prompt "The color of the sky is"
+    --prompt "The color of the sky is" \
+    --compress-ratio 0.8
 
 

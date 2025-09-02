@@ -8,14 +8,18 @@ import warnings
 from enum import Enum
 from functools import partial
 from typing import Type
-
+import shutil
+from tqdm import tqdm
 import torch
 from neuronx_distributed.quantization.quantization_config import (
     ActivationQuantizationType,
     QuantizationType,
 )
-from transformers import AutoTokenizer, GenerationConfig
+import torch.nn as nn
+from safetensors.torch import save_file, load_file, save_model
 
+from transformers import AutoTokenizer, GenerationConfig
+import math
 from models.application_base import NeuronApplicationBase
 from models.config import (
     FusedSpecNeuronConfig,
@@ -24,7 +28,7 @@ from models.config import (
     to_torch_dtype,
 )
 from models.dbrx.modeling_dbrx import NeuronDbrxForCausalLM
-from models.llama.modeling_llama import NeuronLlamaForCausalLM
+from models.llama.modeling_llama import NeuronLlamaForCausalLM, SVD_LlamaMLP
 from models.mixtral.modeling_mixtral import NeuronMixtralForCausalLM
 from modules.lora_serving import LoraServingConfig
 from utils.accuracy import (
@@ -40,6 +44,7 @@ from utils.exceptions import LogitMatchingValidationError
 from utils.hf_adapter import load_pretrained_config
 from utils.random import set_random_seed
 from utils.constants import BENCHMARK_REPORT_PATH
+from transformers import AutoModelForCausalLM, LlamaTokenizer, AutoTokenizer, LlamaForCausalLM
 
 set_random_seed(0)
 
@@ -366,6 +371,17 @@ def load_json_file(json_path):
         return json.load(f)
 
 
+def get_submodule(module, layers=[nn.Conv2d, nn.Linear], name=''):
+    if type(module) in layers:
+        return {name: module}
+    res = {}
+    for name1, child in module.named_children():
+        res.update(get_submodule(
+            child, layers=layers, name=name + '.' + name1 if name != '' else name1
+        ))
+    return res
+
+
 def get_modules_to_not_convert_json(json_path):
     modules_to_not_convert, draft_model_modules_to_not_convert = None, None
     assert os.path.exists(json_path), f"File not found: {json_path}"
@@ -528,8 +544,11 @@ def run_accuracy_check(
 
 
 
-def run_inference(model_cls: Type[NeuronApplicationBase], args):
+def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
 
+    if svd is True:
+        args.model_path = args.model_path + "/svd_llama"
+    
     ############################################ Configure generation config
     
     generation_config = GenerationConfig.from_pretrained(args.model_path)
@@ -553,8 +572,8 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args):
     adapter_ids, neuron_config = create_neuron_config(model_cls, args)
     config = model_cls.get_config_cls()( # LlamaInferenceConfig -> InferenceConfig
         neuron_config, load_config=load_pretrained_config(args.model_path),
-        metadata={"svd_llama": True,
-                  "compress_ratio": 0.8}
+        metadata={"svd_llama": svd,
+                  "compress_ratio": args.compress_ratio}
     )
 
     ############################################  compile
@@ -595,11 +614,102 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args):
         print('-' * 90, file=f)
         print("model: ", args.model_path, file=f)
         print(json.dumps(report, indent=4), file=f)
+    return report
+
+
+def svd_flash(args):
+
+    model = AutoModelForCausalLM.from_pretrained(args.model_path, device_map="cpu", torch_dtype=torch.float16, trust_remote_code=True, cache_dir=None)
+    model = model.eval()
+
+    print('-' * 90)
+    print(model)
     
+    save_dir = args.model_path + "/svd_llama"
+    os.makedirs(save_dir, exist_ok=True)
+    for filename in os.listdir(args.model_path):
+        if filename.endswith(".json"):
+            src_path = os.path.join(args.model_path, filename)
+            dst_path = os.path.join(save_dir, filename)
+            shutil.copy2(src_path, dst_path)
+
+    if 'opt' in args.model_path:
+        layers = model.model.decoder.layers
+    else:
+        layers = model.model.layers
+
+    print("Start SVD decomposition ...")
+    for i in tqdm(range(len(layers))):
+        layer = layers[i]
+        subset = get_submodule(layer)
+        subset = {
+            k: v for k, v in subset.items()
+            if "self_attn" not in k
+        }
+        #### Replace MLP ####
+        if "Llama" in args.model_path or "llama" in args.model_path or "vicuna" in args.model_path:
+            svd_mlp = SVD_LlamaMLP(config=model.config, compress_ratio=args.compress_ratio)
+        elif "mistral" in model_path:
+            svd_mlp = SVD_MistralMLP(config=model.config, compress_ratio=args.compress_ratio)
+        elif 'opt' in model_path:
+            svd_decoder = SVDOPTDecoderLayer(model.config, compress_ratio=args.compress_ratio)
+        
+        for name in subset:
+            W = subset[name].weight.data.float()
+            dtype = W.dtype
+            
+            U, S, VT = torch.linalg.svd(W, full_matrices=False)
+            num_s_after_trunc = math.ceil(W.shape[0] * W.shape[1] * args.compress_ratio / ((W.shape[0] + W.shape[1]) * 128)) * 128
+            truc_s = S[:num_s_after_trunc]
+            truc_u = U[:, :num_s_after_trunc]
+            truc_v = VT[:num_s_after_trunc, :]
+            truc_sigma = torch.diag(truc_s)
+            sqrtSigma = torch.sqrt(truc_sigma)
+            svd_u = torch.matmul(truc_u, sqrtSigma).cpu().to(dtype)
+            svd_v = torch.matmul(sqrtSigma, truc_v).cpu().to(dtype)
+            if 'opt' in args.model_path:
+                if "fc1" in name:
+                    svd_decoder.fc1_u_proj.weight.data = svd_u
+                    svd_decoder.fc1_v_proj.weight.data = svd_v
+                    svd_decoder.fc1_u_proj.bias.data = layer.fc1.bias.data
+                elif "fc2" in name:
+                    svd_decoder.fc2_u_proj.weight.data = svd_u
+                    svd_decoder.fc2_v_proj.weight.data = svd_v
+                    svd_decoder.fc2_u_proj.bias.data = layer.fc2.bias.data
+                    svd_decoder.self_attn_layer_norm = layer.self_attn_layer_norm
+                    svd_decoder.final_layer_norm = layer.final_layer_norm
+                    layers[i] = svd_decoder
+            else:
+                if "gate_proj" in name:
+                    svd_mlp.gate_u_proj.weight.data = svd_u
+                    svd_mlp.gate_v_proj.weight.data = svd_v
+                elif "down_proj" in name:
+                    svd_mlp.down_u_proj.weight.data = svd_u
+                    svd_mlp.down_v_proj.weight.data = svd_v
+                elif "up_proj" in name:
+                    svd_mlp.up_u_proj.weight.data = svd_u
+                    svd_mlp.up_v_proj.weight.data = svd_v
+                    layer.mlp = svd_mlp
+            W = W_scale = scaling_matrix_inv = scaling_diag_matrix = U = S = VT  = truc_s = truc_u = truc_v = sqrtSigma = None
+            del  W, W_scale, scaling_matrix_inv, scaling_diag_matrix, U, S, VT, truc_s, truc_u, truc_v, sqrtSigma
+        del layer
+        torch.cuda.empty_cache()
+
+    state_dict = model.state_dict()
+    if 'lm_head.weight' in state_dict:
+        del state_dict['lm_head.weight']
+    save_file(state_dict, os.path.join(save_dir,"model.safetensors"))
+
 
 
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run_inference(NeuronLlamaForCausalLM, args)
+    report_wo_svd = run_inference(NeuronLlamaForCausalLM, args, svd=False)
+    svd_flash(args)
+    report_svd = run_inference(NeuronLlamaForCausalLM, args, svd=True)
+    print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"])
+    print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"])
+    print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"] )
+

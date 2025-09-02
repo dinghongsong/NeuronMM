@@ -211,15 +211,15 @@ class NeuronAttentionBase(nn.Module):
     def init_tkg_cp_qkv_o_proj(self):
         rank_ordering = get_context_parallel_reordered_tp_mapping(self.neuron_config.tp_degree, self.neuron_config.cp_degree)
         
-        if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
-            QKV_cls = GroupQueryAttention_QKV
-            O_cls = GroupQueryAttention_O
-        else:
-            QKV_cls = GroupQueryAttention_QKV_Ori
-            O_cls = GroupQueryAttention_O_Ori
+        # if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
+        #     QKV_cls = GroupQueryAttention_QKV
+        #     O_cls = GroupQueryAttention_O
+        # else:
+        #     QKV_cls = GroupQueryAttention_QKV_Ori
+        #     O_cls = GroupQueryAttention_O_Ori
 
-        # QKV_cls = GroupQueryAttention_QKV_Ori
-        # O_cls = GroupQueryAttention_O_Ori
+        QKV_cls = GroupQueryAttention_QKV_Ori
+        O_cls = GroupQueryAttention_O_Ori
 
         self.tkg_qkv_proj = QKV_cls(
             hidden_size=self.hidden_size,
@@ -264,15 +264,15 @@ class NeuronAttentionBase(nn.Module):
 
     def init_gqa_properties(self):
 
-        if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
-            QKV_cls = GroupQueryAttention_QKV
-            O_cls = GroupQueryAttention_O
-        else:
-            QKV_cls = GroupQueryAttention_QKV_Ori
-            O_cls = GroupQueryAttention_O_Ori
+        # if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
+        #     QKV_cls = GroupQueryAttention_QKV
+        #     O_cls = GroupQueryAttention_O
+        # else:
+        #     QKV_cls = GroupQueryAttention_QKV_Ori
+        #     O_cls = GroupQueryAttention_O_Ori
 
-        # QKV_cls = GroupQueryAttention_QKV_Ori
-        # O_cls = GroupQueryAttention_O_Ori
+        QKV_cls = GroupQueryAttention_QKV_Ori
+        O_cls = GroupQueryAttention_O_Ori
 
         qkv_proj = QKV_cls(
             config=self.config,
