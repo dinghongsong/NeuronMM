@@ -198,9 +198,9 @@ def benchmark_sampling(
 
     print("Benchmark completed and its result is as following")
     print(json.dumps(report, indent=4))
-    with open(benchmark_report_path, "w") as f:
-        json.dump(report, f)
-    print("Completed saving result to " + benchmark_report_path)
+    # with open(benchmark_report_path, "w") as f:
+    #     json.dump(report, f)
+    # print("Completed saving result to " + benchmark_report_path)
 
     return report
 

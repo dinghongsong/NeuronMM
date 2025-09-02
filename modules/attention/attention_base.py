@@ -55,7 +55,7 @@ from utils.distributed import get_tp_group, split_along_dim, get_cp_rank
 from neuronxcc.nki.language import nc
 from torch_neuronx.xla_impl.ops import nki_jit  # noqa: E402
 
-from .gqa import GQA, GroupQueryAttention_O, GroupQueryAttention_QKV  # noqa: E402
+from .gqa import GQA, GroupQueryAttention_O, GroupQueryAttention_QKV, GroupQueryAttention_O_Ori, GroupQueryAttention_QKV_Ori  # noqa: E402
 
 logger = logging.getLogger("Neuron")
 
@@ -210,8 +210,18 @@ class NeuronAttentionBase(nn.Module):
 
     def init_tkg_cp_qkv_o_proj(self):
         rank_ordering = get_context_parallel_reordered_tp_mapping(self.neuron_config.tp_degree, self.neuron_config.cp_degree)
+        
+        if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
+            QKV_cls = GroupQueryAttention_QKV
+            O_cls = GroupQueryAttention_O
+        else:
+            QKV_cls = GroupQueryAttention_QKV_Ori
+            O_cls = GroupQueryAttention_O_Ori
 
-        self.tkg_qkv_proj = GroupQueryAttention_QKV(
+        # QKV_cls = GroupQueryAttention_QKV_Ori
+        # O_cls = GroupQueryAttention_O_Ori
+
+        self.tkg_qkv_proj = QKV_cls(
             hidden_size=self.hidden_size,
             head_dim=self.head_dim,
             num_attention_heads=self.num_attention_heads,
@@ -233,7 +243,7 @@ class NeuronAttentionBase(nn.Module):
             on_cpu=self.neuron_config.on_cpu,
             rank_ordering=rank_ordering,
         )
-        self.tkg_o_proj = GroupQueryAttention_O(
+        self.tkg_o_proj = O_cls(
             hidden_size=self.hidden_size,
             head_dim=self.head_dim,
             num_attention_heads=self.num_attention_heads,
@@ -253,7 +263,18 @@ class NeuronAttentionBase(nn.Module):
         )
 
     def init_gqa_properties(self):
-        qkv_proj = GroupQueryAttention_QKV(
+
+        if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
+            QKV_cls = GroupQueryAttention_QKV
+            O_cls = GroupQueryAttention_O
+        else:
+            QKV_cls = GroupQueryAttention_QKV_Ori
+            O_cls = GroupQueryAttention_O_Ori
+
+        # QKV_cls = GroupQueryAttention_QKV_Ori
+        # O_cls = GroupQueryAttention_O_Ori
+
+        qkv_proj = QKV_cls(
             config=self.config,
             hidden_size=self.hidden_size,
             head_dim=self.head_dim,
@@ -277,7 +298,7 @@ class NeuronAttentionBase(nn.Module):
             tiling_factor=self.neuron_config.cc_pipeline_tiling_factor if self.neuron_config.tile_cc else 1,
             seq_len_threshold_for_cc_tiling=self.neuron_config.seq_len_threshold_for_cc_tiling,
         )
-        o_proj = GroupQueryAttention_O(
+        o_proj = O_cls(
             config=self.config,
             hidden_size=self.hidden_size,
             head_dim=self.head_dim,

@@ -1,0 +1,11 @@
+.vscode
+__pycache__/
+*.pyc
+
+venv/
+
+*.log
+
+
+*.pt
+*.safetensors

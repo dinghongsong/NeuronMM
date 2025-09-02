@@ -420,184 +420,6 @@ def create_neuron_config(model_cls, args):
     neuron_config = model_cls.get_neuron_config_cls()(**config_kwargs)
     return adapter_ids, neuron_config
 
-
-def run_inference(model_cls: Type[NeuronApplicationBase], args):
-    adapter_ids, neuron_config = create_neuron_config(model_cls, args)
-
-    config = model_cls.get_config_cls()( # LlamaInferenceConfig -> InferenceConfig
-        neuron_config, load_config=load_pretrained_config(args.model_path)
-    )
-
-    # Initialize draft model.
-    draft_model = None
-    if neuron_config.speculation_length > 0 and args.draft_model_path is not None:
-        # Reset speculation options to defaults for the draft model.
-        draft_neuron_config = copy.deepcopy(config.neuron_config)
-
-        # Set modules_to_not_convert for the draft model configs
-        if getattr(config.neuron_config, "draft_model_modules_to_not_convert", None):
-            draft_neuron_config.modules_to_not_convert = (
-                draft_neuron_config.draft_model_modules_to_not_convert
-            )
-
-        # eagle requires the draft model to have speculation enabled for the last draft run
-        if not neuron_config.enable_eagle_speculation:
-            draft_neuron_config.speculation_length = 0
-        draft_neuron_config.enable_fused_speculation = False
-        # Set eagle specific config changes
-        if neuron_config.enable_eagle_speculation:
-            draft_neuron_config.is_eagle_draft = True
-
-        if args.draft_model_tp_degree is not None:
-            draft_neuron_config.tp_degree = args.draft_model_tp_degree
-
-        draft_config = model_cls.get_config_cls()(
-            draft_neuron_config, load_config=load_pretrained_config(args.draft_model_path)
-        )
-        if neuron_config.enable_fused_speculation:
-            fused_spec_config = FusedSpecNeuronConfig(
-                model_cls._model_cls,
-                draft_config=draft_config,
-                draft_model_path=args.draft_model_path,
-            )
-            config.fused_spec_config = fused_spec_config
-
-        else:
-            draft_model = model_cls(args.draft_model_path, draft_config)
-
-    model = model_cls(args.model_path, config)
-    if args.input_start_offsets:
-        assert len(args.input_start_offsets) == 1 or len(args.input_start_offsets) == args.batch_size, "The number of input offsets has to be either 1 or equal or batch size."
-
-    # Quantize model.
-    if neuron_config.quantized:
-        model_cls.save_quantized_state_dict(args.model_path, config)
-
-    # Compile and save model.
-    compiling_start_time = time.monotonic()
-    if not args.skip_compile and not args.on_cpu:
-        print("\nCompiling and saving model...")
-        model.compile(args.compiled_model_path, debug=args.hlo_debug, dry_run=args.compile_dry_run)
-        if draft_model is not None and neuron_config.enable_fused_speculation is False:
-            print("\nCompiling and saving draft model...")
-            draft_model.compile(
-                args.compiled_draft_model_path, debug=args.hlo_debug, dry_run=args.compile_dry_run
-            )
-        compiling_end_time = time.monotonic()
-        total_compiling_time = compiling_end_time - compiling_start_time
-        print(f"Compiling and tracing time: {total_compiling_time} seconds")
-    else:
-        print("\nSkipping model compilation")
-
-    if args.enable_torch_dist:
-        torch.distributed.barrier()
-
-    if args.compile_only or args.compile_dry_run:
-        return
-
-    # Load compiled model to Neuron.
-    loading_start_time = time.monotonic()
-    if not args.on_cpu:
-        print("\nLoading model to Neuron...")
-        model.load(args.compiled_model_path)
-    else:
-        print("\nLoading model to CPU...")
-        model.to_cpu()
-    loading_end_time = time.monotonic()
-    model_loading_time = loading_end_time - loading_start_time
-    print(f"Total model loading time: {model_loading_time} seconds")
-
-    if (
-        draft_model is not None
-        and neuron_config.enable_fused_speculation is False
-        and not args.on_cpu
-    ):
-        print("\nLoading draft model to Neuron...")
-        draft_model.load(args.compiled_draft_model_path)
-
-    if args.enable_torch_dist:
-        torch.distributed.barrier()
-
-    # Load tokenizer.
-    tokenizer = load_tokenizer(args.model_path, args.compiled_model_path, neuron_config)
-
-    # Configure generation config.
-    generation_config = GenerationConfig.from_pretrained(args.model_path)
-    generation_config_args = [
-        "do_sample",
-        "top_k",
-        "pad_token_id",
-        "dynamic",
-        "top_p",
-        "temperature",
-    ]
-    generation_config_kwargs = {
-        k: getattr(args, k) for k in generation_config_args if getattr(args, k) is not None
-    }
-    remaining_kwargs = generation_config.update(**generation_config_kwargs)
-    # add any remaining ones (this can happen when the model generation config is missing some entries)
-    for k, v in remaining_kwargs.items():
-        generation_config.__dict__[k] = v
-
-    # With Medusa, the model is also the draft model.
-    if neuron_config.is_medusa:
-        draft_model = model
-
-    input_capture_hook = None
-    capture_indices = args.capture_indices
-
-    # Check accuracy.
-    # logit_error = None
-    # try:
-    #     run_accuracy_check(
-    #         model,
-    #         tokenizer,
-    #         generation_config,
-    #         args.prompts[0],
-    #         args.check_accuracy_mode,
-    #         args.divergence_difference_tol,
-    #         args.tol_map,
-    #         num_tokens_to_check=args.num_tokens_to_check,
-    #         draft_model=draft_model,
-    #         expected_outputs_path=args.expected_outputs_path,
-    #         input_start_offsets=args.input_start_offsets,
-    #     )
-    # except LogitMatchingValidationError as e:
-    #     logit_error = e
-    #     if args.capture_indices == argparse_utils.AUTO:
-    #         capture_indices = logit_error.get_divergence_index()
-    #         print(f"\nAuto capture after a failed logits test. Setting capture indices to {capture_indices}")
-
-    # if args.capture_indices == argparse_utils.AUTO and logit_error is None:
-    #     capture_indices = None
-
-    # if capture_indices is not None:
-    #     input_capture_hook = partial(
-    #         capture_model_inputs,
-    #         capture_indices=capture_indices,
-    #         input_capture_save_dir=args.input_capture_save_dir,
-    #     )
-
-    # Generate outputs.
-    run_generation(
-        model,
-        tokenizer,
-        args.prompts,
-        generation_config,
-        draft_model=draft_model,
-        adapter_ids=adapter_ids,
-        input_capture_hook=input_capture_hook,
-        input_start_offsets=args.input_start_offsets,
-    )
-
-    # if logit_error is not None:
-    #     raise logit_error
-
-    # Benchmarking.
-    if args.benchmark:
-        benchmark_sampling(model, draft_model, generation_config, benchmark_report_path=args.benchmark_report_path)
-
-
 def load_tokenizer(model_path, compiled_model_path, neuron_config):
     tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side=neuron_config.padding_side)
     tokenizer.pad_token = tokenizer.eos_token
@@ -704,25 +526,80 @@ def run_accuracy_check(
         raise ValueError(f"Unsupported check accuracy mode: {check_accuracy_mode}")
 
 
-def main():
-    args = parse_args()
-    assert (
-        args.task_type in MODEL_TYPES[args.model_type]
-    ), f"Unsupported task: {args.model_type}/{args.task_type}"
 
-    if args.enable_torch_dist:
-        torch.distributed.init_process_group(
-            backend="gloo",
-            world_size=get_init_world_size(),
-            rank=get_init_rank(),
-        )
-        node_rank = torch.distributed.get_rank()
-        args.start_rank_id = node_rank * args.local_ranks_size
-        torch.distributed.barrier()
 
-    model_cls = MODEL_TYPES[args.model_type][args.task_type]
-    run_inference(model_cls, args)
+def run_inference(model_cls: Type[NeuronApplicationBase], args):
+
+    ############################################ Configure generation config
+    
+    generation_config = GenerationConfig.from_pretrained(args.model_path)
+    generation_config_args = [
+        "do_sample",
+        "top_k",
+        "pad_token_id",
+        "dynamic",
+        "top_p",
+        "temperature",
+    ]
+    generation_config_kwargs = {
+        k: getattr(args, k) for k in generation_config_args if getattr(args, k) is not None
+    }
+    remaining_kwargs = generation_config.update(**generation_config_kwargs)
+    for k, v in remaining_kwargs.items():
+        generation_config.__dict__[k] = v
+
+    ############################################  config
+
+    adapter_ids, neuron_config = create_neuron_config(model_cls, args)
+    config = model_cls.get_config_cls()( # LlamaInferenceConfig -> InferenceConfig
+        neuron_config, load_config=load_pretrained_config(args.model_path),
+        metadata={"svd_llama": True,
+                  "compress_ratio": 0.8}
+    )
+
+    ############################################  compile
+
+    model = model_cls(args.model_path, config)
+    model.compile(args.compiled_model_path, debug=args.hlo_debug, dry_run=args.compile_dry_run)
+    if not args.on_cpu:
+        print("\nLoading model to Neuron...")
+        model.load(args.compiled_model_path)
+    else:
+        print("\nLoading model to CPU...")
+        model.to_cpu()
+    
+    
+    ############################################  Generate outputs
+
+    # # Load tokenizer.
+    # tokenizer = load_tokenizer(args.model_path, args.compiled_model_path, neuron_config)
+
+    # run_generation(
+    #     model,
+    #     tokenizer,
+    #     args.prompts,
+    #     generation_config,
+    #     draft_model=None,
+    #     adapter_ids=adapter_ids,
+    #     input_capture_hook=None,
+    #     input_start_offsets=args.input_start_offsets,
+    # )
+
+    ############################################  benchmark
+
+    print('-' * 90)
+    print("model: ", args.model_path)
+    print("benchmark_sampling: ")
+    report = benchmark_sampling(model, None, generation_config, benchmark_report_path=None)
+    with open("/home/ubuntu/SVD-Flash/output.log", "a") as f:
+        print('-' * 90, file=f)
+        print("model: ", args.model_path, file=f)
+        print(json.dumps(report, indent=4), file=f)
+    
+
+
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    run_inference(NeuronLlamaForCausalLM, args)
