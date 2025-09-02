@@ -695,8 +695,9 @@ def svd_flash(args):
         torch.cuda.empty_cache()
 
     state_dict = model.state_dict()
-    if 'lm_head.weight' in state_dict:
-        del state_dict['lm_head.weight']
+
+    if "Llama-3.1-8B" not in args.model_path and 'lm_head.weight' in state_dict:
+        del state_dict['lm_head.weight']  # tie_word_embeddings
     save_file(state_dict, os.path.join(save_dir,"model.safetensors"))
 
 
@@ -708,7 +709,7 @@ if __name__ == "__main__":
     report_wo_svd = run_inference(NeuronLlamaForCausalLM, args, svd=False)
     svd_flash(args)
     report_svd = run_inference(NeuronLlamaForCausalLM, args, svd=True)
-    
+
     print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"])
     print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"])
     print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"])
