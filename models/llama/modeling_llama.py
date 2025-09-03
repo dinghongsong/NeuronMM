@@ -386,11 +386,17 @@ def get_fused_mlp_up_T_params(S):
         dict: Parameter configuration for fused_mlp_up_T
     """
     if S == 1:
+        # return {
+        #     'M_tiles_in_block': 16, 
+        #     'r_tiles_in_block': 4, 
+        #     'K_tiles_in_block': 1, 
+        #     'N_tiles_in_block': 16
+        # }
         return {
-            'M_tiles_in_block': 16, 
-            'r_tiles_in_block': 4, 
+            'M_tiles_in_block': 1, 
+            'r_tiles_in_block': 1, 
             'K_tiles_in_block': 1, 
-            'N_tiles_in_block': 16
+            'N_tiles_in_block': 8
         }
     elif S < 128:
         return {
@@ -447,9 +453,15 @@ def get_fused_three_mm_XTUV_params(S):
         dict: Parameter configuration for fused_three_mm_XTUV
     """
     if S == 1:
+        # return {
+        #     'M_tiles_in_block': 16, 
+        #     'r_tiles_in_block': 4, 
+        #     'K_tiles_in_block': 1, 
+        #     'N_tiles_in_block': 4
+        # }
         return {
-            'M_tiles_in_block': 16, 
-            'r_tiles_in_block': 4, 
+            'M_tiles_in_block': 8, 
+            'r_tiles_in_block': 2, 
             'K_tiles_in_block': 1, 
             'N_tiles_in_block': 4
         }
@@ -992,14 +1004,14 @@ class SVD_LlamaMLP(nn.Module):
 
         low_rank = math.ceil(self.intermediate_size * self.hidden_size * compress_ratio / ((self.intermediate_size + self.hidden_size) * 128)) * 128
 
-        self.gate_v_proj = nn.Linear(self.hidden_size, low_rank, bias=config.mlp_bias)
-        self.gate_u_proj = nn.Linear(low_rank, self.intermediate_size, bias=config.mlp_bias)
+        self.gate_v_proj = nn.Linear(self.hidden_size, low_rank)
+        self.gate_u_proj = nn.Linear(low_rank, self.intermediate_size)
 
-        self.up_v_proj = nn.Linear(self.hidden_size, low_rank, bias=config.mlp_bias)
-        self.up_u_proj = nn.Linear(low_rank, self.intermediate_size, bias=config.mlp_bias)
+        self.up_v_proj = nn.Linear(self.hidden_size, low_rank)
+        self.up_u_proj = nn.Linear(low_rank, self.intermediate_size)
 
-        self.down_v_proj = nn.Linear(self.intermediate_size, low_rank, bias=config.mlp_bias)
-        self.down_u_proj = nn.Linear(low_rank, self.hidden_size, bias=config.mlp_bias)
+        self.down_v_proj = nn.Linear(self.intermediate_size, low_rank)
+        self.down_u_proj = nn.Linear(low_rank, self.hidden_size)
         
 
     def forward(self, x):
@@ -2259,7 +2271,8 @@ class NeuronLlamaDecoderLayer(nn.Module):
         self.self_attn = _LLAMA_MODULE_MAP[config.neuron_config.attn_cls](
             config=config, tensor_model_parallel_group=get_tp_group(config)
         )
-
+        
+        ####################
         self.config = config
         if self.config.metadata is not None and self.config.metadata["svd_llama"] is True:
             self.mlp = NeuronLlamaMLP_SVD(config)
