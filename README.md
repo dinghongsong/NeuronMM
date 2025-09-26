@@ -1,6 +1,6 @@
 ## SVD-Flash
 
-![SVD-Flash: Efficient LLM inference via SVD Compression and Tiling on AWS Trainium](./images/svd_flash.png)
+![SVD-Flash: Efficient LLM inference via SVD Compression and Tiling on AWS Trainium](./images/neuronmm.png)
 
 ## Setup Steps
 
