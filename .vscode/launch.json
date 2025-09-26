@@ -1,0 +1,61 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--model-type", "llama",
+                "--task-type", "causal-lm",
+                "run",
+                // "--model-path", "/home/ubuntu/models/llama-3.2-1b",
+                // "--compiled-model-path", "/home/ubuntu/traced_model/llama-3.2-1b",
+                
+                // "--model-path", "/home/ubuntu/models/Llama-3.2-3B",
+                // "--compiled-model-path", "/home/ubuntu/traced_model/Llama-3.2-3B",
+ 
+                // "--model-path", "/home/ubuntu/models/Llama-3.1-8B",
+                // "--compiled-model-path", "/home/ubuntu/traced_model/Llama-3.1-8B",
+ 
+                // "--model-path", "/home/ubuntu/models/Qwen3-8B",
+                // "--compiled-model-path", "/home/ubuntu/traced_model/Qwen3-8B",
+                
+                // "--model-path", "/home/ubuntu/models/Qwen3-4B",
+                // "--compiled-model-path", "/home/ubuntu/traced_model/Qwen3-4B",
+
+                "--model-path", "/home/ubuntu/models/Qwen3-1.7B",
+                "--compiled-model-path", "/home/ubuntu/traced_model/Qwen3-1.7B",
+
+                "--torch-dtype", "bfloat16",
+                "--tp-degree", "1",
+                "--batch-size", "1",
+                "--max-context-length", "1024",
+                "--seq-len", "2048",
+                "--check-accuracy-mode", "logit-matching",
+                "--divergence-difference-tol", "0.005",
+                "--tol-map", "{5: (1e-5, 0.02)}",
+                "--enable-bucketing",
+                "--top-k", "1",
+                "--pad-token-id", "2",
+                "--prompt", "I believe the meaning of life is",
+                "--prompt", "The color of the sky is",
+                "--compress-ratio", "0.8"
+            ],
+            "justMyCode": false
+
+        }
+    ]
+}
+
+// Qwen3-4B
+// E2E Speedup:  1.9647520396374387 0.85
+// E2E Speedup:  1.9655482786358223 0.8
+// E2E Speedup:  1.466544459370916  0.75
+// E2E Speedup:  1.282568990662078  0.90
+// E2E Speedup:  1.203828045750512  0.95

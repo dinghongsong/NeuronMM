@@ -542,10 +542,29 @@ def run_accuracy_check(
         raise ValueError(f"Unsupported check accuracy mode: {check_accuracy_mode}")
 
 
+def clear_neuron_cache(cache_dir="/var/tmp/neuron-compile-cache"):
+    """
+=    """
+    if os.path.exists(cache_dir):
+        for filename in os.listdir(cache_dir):
+            file_path = os.path.join(cache_dir, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.remove(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                print(f"Failed to delete {file_path}. Reason: {e}")
+        print(f"All contents in {cache_dir} have been deleted.")
+    else:
+        print(f"{cache_dir} does not exist.")
+
+
 
 
 def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
 
+    clear_neuron_cache()
     if svd is True:
         args.model_path = args.model_path + "/svd_llama"
     
@@ -608,10 +627,14 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
 
     print('-' * 90)
     print("model: ", args.model_path)
+    print("max_context_length: ", args.max_context_length)
+    print("seq_len: ", args.seq_len)
     report = benchmark_sampling(model, None, generation_config, benchmark_report_path=None)
-    with open("/home/ubuntu/SVD-Flash/output.log", "a") as f:
+    with open("/home/ubuntu/SVD-Flash/llama_output.log", "a") as f:
         print('-' * 90, file=f)
         print("model: ", args.model_path, file=f)
+        print("max_context_length: ", args.max_context_length, file=f)
+        print("seq_len: ", args.seq_len, file=f)
         print(json.dumps(report, indent=4), file=f)
     return report
 
@@ -622,6 +645,7 @@ def svd_flash(args):
     model = model.eval()
 
     print('-' * 90)
+    print("model: ", args.model_path)
     print(model)
     
     save_dir = args.model_path + "/svd_llama"
@@ -658,7 +682,7 @@ def svd_flash(args):
             dtype = W.dtype
             
             U, S, VT = torch.linalg.svd(W, full_matrices=False)
-            num_s_after_trunc = math.ceil(W.shape[0] * W.shape[1] * args.compress_ratio / ((W.shape[0] + W.shape[1]) * 128)) * 128
+            num_s_after_trunc =round(W.shape[0] * W.shape[1] * args.compress_ratio / ((W.shape[0] + W.shape[1]) * 128)) * 128
             truc_s = S[:num_s_after_trunc]
             truc_u = U[:, :num_s_after_trunc]
             truc_v = VT[:num_s_after_trunc, :]
@@ -705,6 +729,7 @@ def svd_flash(args):
 
 
 if __name__ == "__main__":
+
     args = parse_args()
     report_wo_svd = run_inference(NeuronLlamaForCausalLM, args, svd=False)
     svd_flash(args)
@@ -713,7 +738,7 @@ if __name__ == "__main__":
     print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"])
     print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"])
     print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"])
-    with open("/home/ubuntu/SVD-Flash/output.log", "a") as f:
+    with open("/home/ubuntu/SVD-Flash/llama_output.log", "a") as f:
         print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"], file=f)
         print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"], file=f)
         print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"], file=f)

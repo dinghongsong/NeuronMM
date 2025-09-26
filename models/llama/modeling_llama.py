@@ -525,6 +525,160 @@ def get_fused_three_mm_XTUV_params(S):
         }
 
 
+
+# def get_fused_mlp_up_T_params(S):
+    
+#     if S == 1:
+#         # return {
+#         #     'M_tiles_in_block': 16, 
+#         #     'r_tiles_in_block': 4, 
+#         #     'K_tiles_in_block': 1, 
+#         #     'N_tiles_in_block': 16
+#         # }
+#         return {
+#             'M_tiles_in_block': 8, 
+#             'r_tiles_in_block': 2, 
+#             'K_tiles_in_block': 1, 
+#             'N_tiles_in_block': 4
+#         }
+#         # return {
+#         #     'M_tiles_in_block': 1, 
+#         #     'r_tiles_in_block': 1, 
+#         #     'K_tiles_in_block': 1, 
+#         #     'N_tiles_in_block': 8
+#         # }
+#     # elif 1< S < 128:
+#     #     return {
+#     #         'M_tiles_in_block': 1, 
+#     #         'r_tiles_in_block': 1, 
+#     #         'K_tiles_in_block': 1, 
+#     #         'N_tiles_in_block': 8
+#     #     }
+#     elif 128 == S: 
+#         # return {
+#         #     'M_tiles_in_block': 8, 
+#         #     'r_tiles_in_block': 4, 
+#         #     'K_tiles_in_block': 1, 
+#         #     'N_tiles_in_block': 4
+#         # }
+#         # return {
+#         #     'M_tiles_in_block': 16, 
+#         #     'r_tiles_in_block': 4, 
+#         #     'K_tiles_in_block': 1, 
+#         #     'N_tiles_in_block': 16
+#         # }
+#         return {
+#             'M_tiles_in_block': 8, 
+#             'r_tiles_in_block': 2, 
+#             'K_tiles_in_block': 1, 
+#             'N_tiles_in_block': 4
+#         }
+#     # elif S == 512:
+#     #     return {
+#     #         'M_tiles_in_block': 8, 
+#     #         'r_tiles_in_block': 4, 
+#     #         'K_tiles_in_block': 1, 
+#     #         'N_tiles_in_block': 16
+#     #     }
+#     # elif 512 < S < 1024:
+#     #     return {
+#     #         'M_tiles_in_block': 8, 
+#     #         'r_tiles_in_block': 4, 
+#     #         'K_tiles_in_block': 2, 
+#     #         'N_tiles_in_block': 1
+#     #     }
+#     # elif S == 1024:
+#     #     return {
+#     #         'M_tiles_in_block': 8, 
+#     #         'r_tiles_in_block': 4, 
+#     #         'K_tiles_in_block': 1, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+#     # else:  # S > 1024
+#     #     return {
+#     #         'M_tiles_in_block': 8, 
+#     #         'r_tiles_in_block': 4, 
+#     #         'K_tiles_in_block': 2, 
+#     #         'N_tiles_in_block': 1
+#     #     }
+
+
+# def get_fused_three_mm_XTUV_params(S):
+
+#     if S == 1:
+#         return {
+#             'M_tiles_in_block': 16, 
+#             'r_tiles_in_block': 4, 
+#             'K_tiles_in_block': 1, 
+#             'N_tiles_in_block': 4
+#         }
+#         # return {
+#         #     'M_tiles_in_block': 8, 
+#         #     'r_tiles_in_block': 8, 
+#         #     'K_tiles_in_block': 4, 
+#         #     'N_tiles_in_block': 4
+#         # }
+#     elif  S == 128:
+#         return {
+#             'M_tiles_in_block': 8, 
+#             'r_tiles_in_block': 8, 
+#             'K_tiles_in_block': 4, 
+#             'N_tiles_in_block': 4
+#         }
+#     # elif 128 < S < 256:
+#     #     # For range 128 < S < 256, use similar to S <= 128 but slightly optimized
+#     #     return {
+#     #         'M_tiles_in_block': 8, 
+#     #         'r_tiles_in_block': 2, 
+#     #         'K_tiles_in_block': 1, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+#     # elif S == 256:
+#     #     return {
+#     #         'M_tiles_in_block': 4, 
+#     #         'r_tiles_in_block': 2, 
+#     #         'K_tiles_in_block': 2, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+#     # elif 256 < S < 512:
+#     #     # For range 256 < S < 512, use similar to S == 256
+#     #     return {
+#     #         'M_tiles_in_block': 4, 
+#     #         'r_tiles_in_block': 2, 
+#     #         'K_tiles_in_block': 2, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+#     # elif S == 512:
+#     #     return {
+#     #         'M_tiles_in_block': 4, 
+#     #         'r_tiles_in_block': 4, 
+#     #         'K_tiles_in_block': 4, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+#     # elif 512 < S < 1024:
+#     #     return {
+#     #         'M_tiles_in_block': 4, 
+#     #         'r_tiles_in_block': 2, 
+#     #         'K_tiles_in_block': 4, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+#     # elif S == 1024:
+#     #     return {
+#     #         'M_tiles_in_block': 4, 
+#     #         'r_tiles_in_block': 4, 
+#     #         'K_tiles_in_block': 8, 
+#     #         'N_tiles_in_block': 1
+#     #     }
+#     # else:  # S > 1024
+#     #     return {
+#     #         'M_tiles_in_block': 4, 
+#     #         'r_tiles_in_block': 2, 
+#     #         'K_tiles_in_block': 8, 
+#     #         'N_tiles_in_block': 4
+#     #     }
+
+
+
 def svd_mlp_with_fused_kernel(x, u_up, v_up, u_gate, v_gate, u_down, v_down, 
                              up_T_params=None, XTUV_params=None):
     """
@@ -969,19 +1123,19 @@ def fused_mlp_up_T(
     return out_ref
 
 
-# Invoke MLP kernel as the following
-def nki_mm(x, up_v_proj, up_u_proj, 
-             gate_v_proj, gate_u_proj,
-             down_v_proj, down_u_proj):
+# # Invoke MLP kernel as the following
+# def nki_mm(x, up_v_proj, up_u_proj, 
+#              gate_v_proj, gate_u_proj,
+#              down_v_proj, down_u_proj):
     
     
-    # Call the optimized kernel with auto-selected parameters
-    result = svd_mlp_with_fused_kernel(
-        x, up_v_proj.T, up_u_proj.T, 
-        gate_v_proj.T, gate_u_proj.T,  
-        down_v_proj.T, down_u_proj.T, 
-    )
-    return result
+#     # Call the optimized kernel with auto-selected parameters
+#     result = svd_mlp_with_fused_kernel(
+#         x, up_v_proj.T, up_u_proj.T, 
+#         gate_v_proj.T, gate_u_proj.T,  
+#         down_v_proj.T, down_u_proj.T, 
+#     )
+#     return result
 
 
 
@@ -1002,16 +1156,17 @@ class SVD_LlamaMLP(nn.Module):
         # self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
         # self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
 
-        low_rank = math.ceil(self.intermediate_size * self.hidden_size * compress_ratio / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        # low_rank = math.ceil(self.intermediate_size * self.hidden_size * compress_ratio / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        low_rank = round(self.intermediate_size * self.hidden_size * compress_ratio / ((self.intermediate_size + self.hidden_size) * 128)) * 128
 
-        self.gate_v_proj = nn.Linear(self.hidden_size, low_rank)
-        self.gate_u_proj = nn.Linear(low_rank, self.intermediate_size)
+        self.gate_v_proj = nn.Linear(self.hidden_size, low_rank, bias=False)
+        self.gate_u_proj = nn.Linear(low_rank, self.intermediate_size, bias=False)
 
-        self.up_v_proj = nn.Linear(self.hidden_size, low_rank)
-        self.up_u_proj = nn.Linear(low_rank, self.intermediate_size)
+        self.up_v_proj = nn.Linear(self.hidden_size, low_rank, bias=False)
+        self.up_u_proj = nn.Linear(low_rank, self.intermediate_size, bias=False)
 
-        self.down_v_proj = nn.Linear(self.intermediate_size, low_rank)
-        self.down_u_proj = nn.Linear(low_rank, self.hidden_size)
+        self.down_v_proj = nn.Linear(self.intermediate_size, low_rank, bias=False)
+        self.down_u_proj = nn.Linear(low_rank, self.hidden_size, bias=False)
         
 
     def forward(self, x):
@@ -1052,7 +1207,8 @@ class NeuronLlamaMLP_SVD(nn.Module):
 
         ############################################ SVD-Flash
         # self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
-        self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        # self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        self.low_rank = round(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
 
         ############################################
         if self.neuron_config.quantized_mlp_kernel_enabled and self.quantize_clamp_bound == float(
@@ -1507,9 +1663,9 @@ class NeuronLlamaMLP_SVD(nn.Module):
         logger.debug(f"MLP output shape {output.shape}")
         return output
 
-    def _svd_mlp(self, x):
+    def _neuron_mm(self, x):
 
-        logger.info("-"*30 + " nki_mm mlp " + "-"*30)
+        logger.info("-"*30 + " neuron_mm mlp " + "-"*30)
 
         # up = self.up_u_proj(self.up_v_proj(x))
         # gate = self.gate_u_proj(self.gate_v_proj(x))
@@ -1517,9 +1673,30 @@ class NeuronLlamaMLP_SVD(nn.Module):
         
         b, s, h = x.shape
         x = x.view(-1, h)
-        return nki_mm(x, self.up_v_proj.weight, self.up_u_proj.weight, 
-             self.gate_v_proj.weight, self.gate_u_proj.weight,
-             self.down_v_proj.weight, self.down_u_proj.weight)
+        # return nki_mm(x, self.up_v_proj.weight, self.up_u_proj.weight, 
+        #      self.gate_v_proj.weight, self.gate_u_proj.weight,
+        #      self.down_v_proj.weight, self.down_u_proj.weight)
+    
+
+        result = svd_mlp_with_fused_kernel(
+            x, self.up_v_proj.weight.t(), self.up_u_proj.weight.t(), 
+            self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t(),  
+            self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
+        return result
+    
+    def _svd_baseline(self, x):
+        logger.info("-"*30 + " svd baseline mlp " + "-"*30)
+        b, s, h = x.shape
+        x = x.view(-1, h)
+        up_v = nki_matmul_fully_optimized_(x.t(), self.up_v_proj.weight.t())
+        up = nki_matmul_fully_optimized_(up_v.t(), self.up_u_proj.weight.t())
+        gate_v = nki_matmul_fully_optimized_(x.t(), self.gate_v_proj.weight.t())
+        gate = nki_matmul_fully_optimized_(gate_v.t(), self.gate_u_proj.weight.t())
+        act = self.act_fn(gate) * up
+        output_v = nki_matmul_fully_optimized_(act.t() , self.down_v_proj.weight.t())
+        output = nki_matmul_fully_optimized_(output_v.t() , self.down_u_proj.weight.t())
+        return output
+
     
     def _svd_flash_mlp(self, x):
 
@@ -1548,8 +1725,9 @@ class NeuronLlamaMLP_SVD(nn.Module):
             # No kernel
             assert rmsnorm is None and residual is None
             # return (self._native_mlp(x, adapter_ids=adapter_ids), None)
-            return (self._svd_mlp(x), None)
-            # return (self._svd_flash_mlp(x), None)
+
+            return (self._neuron_mm(x), None)
+            # return (self._svd_baseline(x), None)
 
 
 ##################################################
@@ -2393,6 +2571,121 @@ class NeuronLlamaDecoderLayer(nn.Module):
 
         # also return residual for QKV in the next layer
         outputs = (hidden_states, attn_output.present_key_value, attn_output.cos_cache, attn_output.sin_cache, residual)
+        # # #################
+        # print(attn_output.present_key_value[0].cpu())
+        # from torch import Tensor
+        # from typing import Tuple
+        # B, H, T, D = 1, 8, 128, 128   # 举例
+        # k1 = torch.randn(B, H, T, D)
+        # v1 = torch.randn(B, H, T, D)
+        # kv: Tuple[Tensor, Tensor] = (k1, v1)
+        
+        # print(tuple(map(repr, kv)))
+
+        # # present_key_value_obj = (repr(present_key_value[0]), repr(present_key_value[1])) 
+        # cos_cache = torch.randn(B, T, D)
+        # sin_cache = torch.randn(B, T, D)
+        
+        # ##########################
+        
+        
+        return outputs
+
+
+    def forward_new(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        adapter_ids=None,
+        rotary_position_ids: Optional[torch.LongTensor] = None,
+        residual: Optional[torch.Tensor] = None,  # residual from previous layer used by QKV
+        **kwargs,
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]], Optional[torch.FloatTensor], Optional[torch.FloatTensor], Optional[torch.FloatTensor]]:
+        entry_hidden_states = hidden_states
+
+        qkv_fused_rmsnorm = None
+        if self.input_layernorm:
+            if self.qkv_kernel_enabled and self.qkv_kernel_fused_rmsnorm:
+                qkv_fused_rmsnorm = self.input_layernorm
+            else:
+                hidden_states = self.input_layernorm(hidden_states)
+
+        # # Self Attention
+        # # produced another residual used by MLP
+        # attn_output = self.self_attn(
+        #     hidden_states=hidden_states,
+        #     attention_mask=attention_mask,
+        #     position_ids=position_ids,
+        #     past_key_value=past_key_value,
+        #     adapter_ids=adapter_ids,
+        #     rmsnorm=qkv_fused_rmsnorm,
+        #     rotary_position_ids=rotary_position_ids,
+        #     residual=residual,
+        #     **kwargs,
+        # )
+
+        # if attn_output.residual is None:
+        #     residual = entry_hidden_states  # input to attention
+        # else:
+        #     # residual will only be returned by attn/qkv if fuse add qkv kernel is enabled
+        #     assert self.qkv_kernel_fuse_residual_add, \
+        #         "residual add before qkv should be computed in the previous layer, \
+        #          unless qkv_kernel_fuse_residual_add is specified"
+        #     assert (
+        #         not self.sequence_parallel_enabled
+        #     ), "qkv_kernel_fuse_residual_add should be off when sequence parallelism is enabled"
+        #     assert (
+        #         self.qkv_kernel_enabled
+        #     ), "qkv_kernel_fuse_residual_add should be used with qkv_kernel_enabled"
+        #     residual = attn_output.residual
+
+        # hidden_states = attn_output.hidden_states
+        residual = entry_hidden_states 
+        if self.mlp_kernel_enabled and self.mlp_kernel_fuse_residual_add:
+            assert (
+                not self.sequence_parallel_enabled
+            ), "mlp_kernel_fuse_residual_add should be off when sequence parallelism is enabled"
+            # First residual add handled in the MLP kernel
+            hidden_states, residual = self.mlp(
+                hidden_states,
+                rmsnorm=self.post_attention_layernorm,
+                residual=residual,
+                adapter_ids=adapter_ids,
+            )
+        else:
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+
+            if self.mlp_kernel_enabled and self.mlp_kernel_fused_rmsnorm:
+                mlp_fused_rmsnorm = self.post_attention_layernorm
+            else:
+                hidden_states = self.post_attention_layernorm(hidden_states)
+                mlp_fused_rmsnorm = None
+
+            hidden_states, _ = self.mlp(
+                hidden_states,
+                rmsnorm=mlp_fused_rmsnorm,
+                adapter_ids=adapter_ids,
+            )
+
+        # if fuse residual add with qkv, we leave this add to the next layer's QKV
+        # unless it is the last layer in which case we add it here
+        if not self.qkv_kernel_fuse_residual_add:
+            hidden_states = residual + hidden_states
+            residual = None  # set to None to prevent it from being used again
+
+        # also return residual for QKV in the next layer
+        # outputs = (hidden_states, None, None, None, residual)
+        B, H, T, D = 1, 8, 128, 128   # 举例
+        present_key_value = (torch.randn(B, H, T, D), torch.randn(B, H, T, D))
+        # cos_cache = torch.randn(B, T, D)
+        # sin_cache = torch.randn(B, T, D)
+        cos_cache = None
+        sin_cache = None
+        outputs = (hidden_states, (None,None), cos_cache, sin_cache, residual)
+
         return outputs
 
 

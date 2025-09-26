@@ -1,9 +1,12 @@
-.vscode
+# .vscode
 __pycache__/
 *.pyc
 
 venv/
-
+*pb
+*neff
+*ntff
+*key
 *.log
 neuronxcc-*
 *.pt

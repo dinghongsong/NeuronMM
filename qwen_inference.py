@@ -589,7 +589,6 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
         print("\nLoading model to CPU...")
         model.to_cpu()
     
-    
     ############################################  Generate outputs
 
     # # Load tokenizer.
@@ -610,10 +609,14 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
 
     print('-' * 90)
     print("model: ", args.model_path)
+    print("max_context_length: ", args.max_context_length)
+    print("seq_len: ", args.seq_len)
     report = benchmark_sampling(model, None, generation_config, benchmark_report_path=None)
     with open("/home/ubuntu/SVD-Flash/qwen_output.log", "a") as f:
         print('-' * 90, file=f)
         print("model: ", args.model_path, file=f)
+        print("max_context_length: ", args.max_context_length, file=f)
+        print("seq_len: ", args.seq_len, file=f)
         print(json.dumps(report, indent=4), file=f)
     return report
 
@@ -622,6 +625,7 @@ def svd_flash(args):
 
     model = AutoModelForCausalLM.from_pretrained(args.model_path, device_map="cpu", torch_dtype=torch.float16, trust_remote_code=True, cache_dir=None)
     model = model.eval()
+    state_dict = model.state_dict()
 
     print('-' * 90)
     print(model)
@@ -660,9 +664,13 @@ def svd_flash(args):
         for name in subset:
             W = subset[name].weight.data.float()
             dtype = W.dtype
-            
+            # W = subset[name].weight.data#.float()
+            # dtype = W.dtype
+            # W = W.float()
             U, S, VT = torch.linalg.svd(W, full_matrices=False)
-            num_s_after_trunc = math.ceil(W.shape[0] * W.shape[1] * args.compress_ratio / ((W.shape[0] + W.shape[1]) * 128)) * 128
+            # num_s_after_trunc = math.ceil(W.shape[0] * W.shape[1] * args.compress_ratio / ((W.shape[0] + W.shape[1]) * 128)) * 128
+            num_s_after_trunc =round(W.shape[0] * W.shape[1] * args.compress_ratio / ((W.shape[0] + W.shape[1]) * 128)) * 128
+            
             truc_s = S[:num_s_after_trunc]
             truc_u = U[:, :num_s_after_trunc]
             truc_v = VT[:num_s_after_trunc, :]
@@ -698,12 +706,18 @@ def svd_flash(args):
         del layer
         torch.cuda.empty_cache()
 
+
+    print('-' * 90)
+    print(model)
+
     state_dict = model.state_dict()
 
-    if "Llama-3.1-8B" not in args.model_path and 'lm_head.weight' in state_dict:
+    if "Qwen3-8B" not in args.model_path and 'lm_head.weight' in state_dict:
         del state_dict['lm_head.weight']  # tie_word_embeddings
-    if "Qwen3-8B"  not in args.model_path and 'lm_head.weight' in state_dict:
-        del state_dict['lm_head.weight']  # tie_word_embeddings
+    
+    # if 'lm_head.weight' in state_dict:
+    #     del state_dict['lm_head.weight']  # tie_word_embeddings
+    
     save_file(state_dict, os.path.join(save_dir,"model.safetensors"))
 
 

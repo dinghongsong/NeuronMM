@@ -24,7 +24,7 @@ def benchmark_sampling(
     generation_config: GenerationConfig = None,
     target: str = None,
     image=None,
-    num_runs=20,
+    num_runs=11,
     benchmark_report_path: str = BENCHMARK_REPORT_PATH,
 ):
     neuron_config = model.neuron_config
@@ -395,6 +395,14 @@ def register_latency_collectors(latency_collectors, model):
         register_forward_latency_collector(
             latency_collectors[TOKEN_GENERATION_MODEL], model.token_generation_model
         )
+    
+    # register_forward_latency_collector(
+    #     latency_collectors[CONTEXT_ENCODING_MODEL], model.context_encoding_model
+    # )
+    # if TOKEN_GENERATION_MODEL in latency_collectors:
+    #     register_forward_latency_collector(
+    #         latency_collectors[TOKEN_GENERATION_MODEL], model.token_generation_model
+    #     )
     if SPECULATION_MODEL in latency_collectors:
         register_forward_latency_collector(
             latency_collectors[SPECULATION_MODEL], model.speculation_model
