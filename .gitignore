@@ -11,3 +11,5 @@ venv/
 neuronxcc-*
 *.pt
 *.safetensors
+*vscode
+
