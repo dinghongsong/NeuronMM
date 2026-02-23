@@ -1428,7 +1428,7 @@ class NkiGroupQueryAttention_QKV(GroupQueryAttention_QKV):
             tensor_model_parallel_group = tensor_model_parallel_group,
             rms_norm_eps = rms_norm_eps,
             qkv_kernel_enabled = qkv_kernel_enabled,
-            logical_neuron_cores = logical_neuron_cores,
+            # logical_neuron_cores = logical_neuron_cores,
         )
         
 
@@ -1752,7 +1752,7 @@ class NeuronLlamaMLP(nn.Module):
         self.mlp_kernel_enabled = self.neuron_config.mlp_kernel_enabled
         self.quantized_mlp_kernel_enabled = self.neuron_config.quantized_mlp_kernel_enabled
         self.rmsnorm_quantize_kernel_enabled = self.neuron_config.rmsnorm_quantize_kernel_enabled
-        self.quantized_kernel_lower_bound = self.neuron_config.quantized_kernel_lower_bound
+        # self.quantized_kernel_lower_bound = self.neuron_config.quantized_kernel_lower_bound
         self.logical_neuron_cores = self.neuron_config.logical_neuron_cores
         mlp_bias = getattr(config, "mlp_bias", False)
         if parallel_state.model_parallel_is_initialized():
@@ -2221,6 +2221,7 @@ class NeuronLlamaAttentionBase(NeuronAttentionBase):
         self.rpl_reduce_dtype = config.neuron_config.rpl_reduce_dtype
         self.mlp_kernel_enabled = config.neuron_config.mlp_kernel_enabled
         self.rms_norm_eps = config.rms_norm_eps
+        self.logical_nc_config = 1
 
         if parallel_state.model_parallel_is_initialized():
             self.tp_degree = self.config.neuron_config.tp_degree
