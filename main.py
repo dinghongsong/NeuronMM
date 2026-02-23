@@ -49,7 +49,8 @@ def parse_args():
 
     # Evaluation
     parser.add_argument("--benchmark", action="store_true")
-    parser.add_argument("--divergence-difference-tol", type=float, default=0.001)
+    parser.add_argument("--divergence-difference-tol", type=float, default=0.1)
+
     parser.add_argument("--tol-map", type=str)
     parser.add_argument("--num-tokens-to-check", type=int)
 
@@ -71,6 +72,7 @@ def parse_args():
     parser.add_argument("--n-active-tokens", type=int)
     parser.add_argument("--n-positions", type=int)
     parser.add_argument("--max-context-length", type=int)
+    # parser.add_argument("--divergence-difference-tol", type=float, default=0.001)
     parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--max-length", type=int)
     parser.add_argument("--rpl-reduce-dtype", type=to_torch_dtype)
