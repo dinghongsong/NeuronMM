@@ -25,6 +25,8 @@ from neuronx_distributed_inference.models.llama import modeling_llama as baselin
 
 # Load the model for ASPLOS contest
 from llama2 import NeuronLlamaForCausalLM
+
+# from llama_svd import NeuronLlamaForCausalLM
 import importlib
 from test import *
 
@@ -420,6 +422,26 @@ def count_nki_flop_ratio(
     hlo_path_context_enc="/tmp/nxd_model/context_encoding_model/_tp0_bk0/model/graph.hlo",
     hlo_path_token_gen="/tmp/nxd_model/token_generation_model/_tp0_bk0/model/graph.hlo"
 ):
+    
+    def find_hlos():
+        
+        # this path is defined by default NxD, the string matching works with Neuron SDK 2.27
+        enc_dir = '/tmp/nxd_model/context_encoding_model/_tp0_bk0'
+        ctx_enc = [f for f in os.listdir(enc_dir) if 'hlo_module' in f.lower()]
+        assert len(ctx_enc) == 1
+        ctx_rt = os.path.join(enc_dir, ctx_enc[0])
+
+        tkg_dir = '/tmp/nxd_model/token_generation_model/_tp0_bk0'
+        tkg_gen = [f for f in os.listdir(tkg_dir) if 'hlo_module' in f.lower()]
+        assert len(tkg_gen) == 1
+        tkg_rt = os.path.join(tkg_dir, tkg_gen[0])
+
+        print ('Found your HLOs')
+
+        return ctx_rt, tkg_rt
+    
+    hlo_path_context_enc, hlo_path_token_gen = find_hlos()
+
     hlo_macs = 0
     nki_macs = 0
 

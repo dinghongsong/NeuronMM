@@ -154,7 +154,7 @@ from neuronx_distributed_inference.modules.attention.utils import (    apply_rot
     manual_softmax,
     move_heads_front,
     repeat_kv)
-from neuronx_distributed_inference.modules.attention.attention_base import (NeuronAttentionBase, FlashAttentionStrategy, _flash_fwd_call )
+from neuronx_distributed_inference.modules.attention.attention_base import (NeuronAttentionBase, FlashAttentionStrategy, _flash_fwd_call_bir )
 from torch import Tensor, nn
 
 _LLAMA_MODULE_MAP = {}
@@ -207,12 +207,12 @@ def allocate_nki_matmul(total_input, weight):
     else:
         if N == 512:
             TILES_IN_BLOCK_N=1
-        elif N == 1024:
+        elif N >= 1024:
             TILES_IN_BLOCK_N=2
         # elif N == 1536:
         #     TILES_IN_BLOCK_N=3
         else:
-            TILES_IN_BLOCK_N=4
+            TILES_IN_BLOCK_N=1
 
 
         if K == 2048 and N == 2048:
@@ -227,6 +227,8 @@ def allocate_nki_matmul(total_input, weight):
         elif K == 4096 and N == 2048:
             TILES_IN_BLOCK_N=4
             TILES_IN_BLOCK_K=16
+        else:
+            TILES_IN_BLOCK_K=1
         
 
         BLOCK_M = TILE_M * TILES_IN_BLOCK_M
@@ -262,8 +264,16 @@ def allocate_nki_matmul(total_input, weight):
         ##########################################
 
         lhs = total_input.view(-1, K)
+        # print("=="*100)
+        # print(f"lhs shape after reshape: {lhs.shape}") 
+        # print(f"weight shape: {weight.t().shape}")
+#         lhs shape after reshape: torch.Size([1024, 2048])
+# weight shape: torch.Size([2048, 512])
+# weight shape: torch.Size([2048, 1024])
         output = nki_matmul_fully_optimized_copy_(lhs.transpose(0, 1), weight.t(),
-                                                        TILES_IN_BLOCK_M,TILES_IN_BLOCK_N,TILES_IN_BLOCK_K,
+                                                        TILES_IN_BLOCK_M,
+                                                        TILES_IN_BLOCK_N,
+                                                        TILES_IN_BLOCK_K,
                                                     )
         if padding:
             output = output[:M, :N]
@@ -782,9 +792,9 @@ def nki_matmul_fully_optimized_copy_(
     lhsT,
     rhs,
     # Meta-parameters
-    TILES_IN_BLOCK_M=16,
-    TILES_IN_BLOCK_N=2,
-    TILES_IN_BLOCK_K=8,
+    TILES_IN_BLOCK_M=8,
+    TILES_IN_BLOCK_N=1,
+    TILES_IN_BLOCK_K=1,
 ):
     """NKI kernel to compute a large matrix multiplication efficiently by
        blocking all dimensions and doing layout optimization.
@@ -816,6 +826,15 @@ def nki_matmul_fully_optimized_copy_(
     BLOCK_K = TILE_K * TILES_IN_BLOCK_K
 
     # the size has to be multiple of block size
+   
+    
+    # print("="*100)
+    # print("M:", M)
+    # print("N:", N)
+    # print("BLOCK_M:", BLOCK_M)
+    # print("BLOCK_N:", BLOCK_N)
+    # print("BLOCK_K:", BLOCK_K)
+    # print("K:", K)
     assert M % BLOCK_M == 0
     assert N % BLOCK_N == 0
     assert K % BLOCK_K == 0
@@ -2202,7 +2221,9 @@ class NeuronLlamaAttentionBase(NeuronAttentionBase):
     """
 
     def __init__(self, config: InferenceConfig, tensor_model_parallel_group=None):
-        super().__init__(tensor_model_parallel_group=tensor_model_parallel_group)
+        super().__init__(config=config, tensor_model_parallel_group=tensor_model_parallel_group,
+                         hidden_size=config.hidden_size, num_attention_heads=config.num_attention_heads,
+                         num_key_value_heads=config.num_key_value_heads)
 
         self.config = config
         self.neuron_config = config.neuron_config
@@ -2256,7 +2277,7 @@ class NeuronLlamaAttentionBase(NeuronAttentionBase):
             num_key_value_heads=self.num_key_value_heads,
             tp_degree=self.tp_degree,
             dtype=self.torch_dtype,
-            bias=self.bias,
+            bias=self.o_bias,
             gather_output=False,
             fused_qkv=self.fused_qkv,
             clip_qkv=self.clip_qkv,
@@ -2274,7 +2295,7 @@ class NeuronLlamaAttentionBase(NeuronAttentionBase):
             num_key_value_heads=self.num_key_value_heads,
             tp_degree=self.tp_degree,
             dtype=self.torch_dtype,
-            bias=self.bias,
+            bias=self.o_bias,
             input_is_parallel=True,
             layer_name=self.o_proj_layer_name,
             sequence_parallel_enabled=self.sequence_parallel_enabled,
@@ -2854,7 +2875,7 @@ class NeuronLlamaAttention(NeuronLlamaAttentionBase):
         K_active = repeat_kv(K, self.num_key_value_groups)
         V_active = repeat_kv(V, self.num_key_value_groups)
 
-        flash_attn_strategy = self.get_flash_attention_strategy(q_len)
+        flash_attn_strategy = self.get_flash_attention_strategy(q_len, attention_mask)
         logger.debug(f"Flash attention strategy: {flash_attn_strategy}")
 
         if flash_attn_strategy != FlashAttentionStrategy.NONE:
@@ -2898,7 +2919,7 @@ class NeuronLlamaAttention(NeuronLlamaAttentionBase):
             if flash_attn_strategy == FlashAttentionStrategy.SHARDED_KERNEL:
                 grid = (vnc(self.logical_neuron_cores),)
 
-                _flash_fwd_call[grid](
+                _flash_fwd_call_bir[grid](
                     Q,
                     K_active,
                     V_active,
@@ -2907,7 +2928,7 @@ class NeuronLlamaAttention(NeuronLlamaAttentionBase):
                     kernel_name="CausalAttentionMMSoftmaxMMWithoutSwap",
                 )
             elif flash_attn_strategy == FlashAttentionStrategy.UNSHARDED_KERNEL:
-                _flash_fwd_call(
+                _flash_fwd_call_bir(
                     Q,
                     K_active,
                     V_active,
@@ -3130,7 +3151,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
 
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states, present_key_value, cos_cache, sin_cache)
+        outputs = (hidden_states, present_key_value, cos_cache, sin_cache, residual)
         return outputs
 
 class ResBlock(nn.Module):
