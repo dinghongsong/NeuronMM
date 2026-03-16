@@ -32,7 +32,7 @@ git clone -b baseline --single-branch https://github.com/dinghongsong/NeuronMM.g
 
 cd NeuronMM
 
-python main.py --enable-nki --mode evaluate_all --seq-len 2048 --context-encoding-buckets 1024
+python main.py --enable-nki --mode evaluate_all --seq-len 2048 --context-encoding-buckets 1024 --tp-degree 2
 
 
 ```
@@ -62,9 +62,11 @@ influx setup \
 ls /tmp/nxd_model/
 
 
-neuron-profile capture -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_5.ntff --profile-nth-exec=2
+neuron-profile capture -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_5.ntff --profile-nth-exec=2  
 
-neuron-profile view -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_5_exec_2.ntff 
+
+
+neuron-profile view -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_5_rank_0_exec_2.ntff 
 ```
 
 

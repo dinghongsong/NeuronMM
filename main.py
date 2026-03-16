@@ -221,6 +221,12 @@ def benchmark_sampling(model, tokenizer, generation_config, prompts):
     input_ids = inputs.input_ids
     attention_mask = inputs.attention_mask
     neuron_config.max_new_tokens = neuron_config.seq_len - input_ids.shape[1]
+    
+    print("===========================================================================")
+    print("seq_len: ", neuron_config.seq_len)
+    print("max_new_tokens: ", neuron_config.max_new_tokens)
+    print("max_length: ", neuron_config.max_length)
+    print("===========================================================================")
 
     input_param = {
         "input_ids": input_ids,
@@ -540,6 +546,19 @@ def main():
         data = prompt_data[i]
         base_latency = float(data[3])
         base_throughput = float(data[4])
+        
+        # accuracy = run_accuracy_check(
+        #         model,
+        #         generation_config,
+        #         model,
+        #         tokenizer,
+        #         generation_config,
+        #         [prompt],
+        #         args.divergence_difference_tol,
+        #         args.tol_map,
+        #         num_tokens_to_check=args.num_tokens_to_check,
+        #     )
+        
         accuracy = 1
        
 
