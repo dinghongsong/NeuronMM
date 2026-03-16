@@ -3090,7 +3090,9 @@ class NeuronLlamaAttention(NeuronAttentionBase):
     """
 
     def __init__(self, config: InferenceConfig, tensor_model_parallel_group=None):
-        super().__init__(tensor_model_parallel_group=tensor_model_parallel_group)
+        super().__init__(config=config, tensor_model_parallel_group=tensor_model_parallel_group,
+                         hidden_size=config.hidden_size, num_attention_heads=config.num_attention_heads,
+                         num_key_value_heads=config.num_key_value_heads)
 
         self.config = config
         self.neuron_config = config.neuron_config
@@ -3482,6 +3484,36 @@ class NeuronLlamaDecoderLayer(nn.Module):
             hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
+        
+        print("####################")
+        
+        del kwargs['seq_ids']
+        del kwargs['rotary_position_ids']
+        del kwargs['kv_mgr'] 
+        del kwargs['get_kv_per_layer'] 
+        del kwargs['update_kv_per_layer'] 
+        del kwargs['idx'] 
+        del kwargs['is_for_context_encoding'] 
+        del kwargs['seq_len'] 
+        del kwargs['residual'] 
+        del kwargs['local_mask'] 
+        del kwargs['windowed_context_encoding_window_idx'] 
+        del kwargs['padding_mask'] 
+        del kwargs['tile_q_indices'] 
+        del kwargs['tile_block_tables'] 
+        del kwargs['tile_masks'] 
+        del kwargs['num_queries'] 
+        del kwargs['scatter_index'] 
+        del kwargs['kvcache_buffer'] 
+        del kwargs['is_for_speculation'] 
+        del kwargs['active_block_table'] 
+        del kwargs['kv_active_mask'] 
+        # del kwargs['seq_len'] 
+        # del kwargs['seq_len'] 
+        # del kwargs['seq_len'] 
+        print("kwargs :", kwargs)
+        print("####################")
+        
         hidden_states, present_key_value, cos_cache, sin_cache = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
@@ -3522,7 +3554,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
 
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states, present_key_value, cos_cache, sin_cache)
+        outputs = (hidden_states, present_key_value, cos_cache, sin_cache, residual)
         return outputs
 
 

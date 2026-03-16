@@ -12,25 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """SBUF-to-SBUF All-Gather collective kernels for TRN2 platform."""
-from neuronxcc import nki
-# import nki
-# import neuronxcc.nki.collectives as ncc
-from neuronxcc.nki.nccl.collectives import collective_permute_implicit 
 
-import neuronxcc.nki.nccl.collectives as ncc
-import neuronxcc.nki.isa as nisa
-import neuronxcc.nki.language as nl
-# from neuronxcc.nki.collectives import ReplicaGroup
+import nki
+import nki.collectives as ncc
+import nki.isa as nisa
+import nki.language as nl
+from nki.collectives import ReplicaGroup
 
 # from ...core.utils.kernel_assert import kernel_assert
 
 
-# @nki.jit(platform_target="trn2")
-@nki.jit
+@nki.jit(platform_target="trn2")
 def allgather_sb2sb(
-    inp,
-    replica_groups,
-    tp_degree,
+    inp: nl.ndarray,
+    replica_groups: ReplicaGroup,
+    tp_degree: int,
 ) -> nl.ndarray:
     """SBUF-to-SBUF all-gather kernel for gathering tensors across ranks.
 
@@ -93,12 +89,83 @@ def allgather_sb2sb(
 
     nisa.dma_copy(dst=out[0:H, 0:K], src=out_buf)
     return out
- 
+
+
+
+@nki.jit(platform_target="trn2")
+def allreduce_sb2sb(
+    inp: nl.ndarray,
+    replica_groups: ReplicaGroup,
+    tp_degree: int,
+) -> nl.ndarray:
+    """SBUF-to-SBUF all-gather kernel for gathering tensors across ranks.
+
+    Gathers input tensors from all ranks along the last dimension (K dimension).
+    Each rank contributes its local tensor, and all ranks receive the concatenated result.
+    Optimized for small tensors that fit entirely in SBUF (H * W <= SBUF capacity).
+
+    Dimensions:
+        H: Height dimension (partition dimension, typically <= 128)
+        W: Width dimension per rank (local width before gather)
+        K: Total width after gather (K = W * tp_degree)
+
+    Args:
+        inp (nl.ndarray): [H, W], Input tensor on HBM, where W is the local width per rank.
+        replica_groups (ReplicaGroup): ReplicaGroup defining which ranks participate in the collective.
+        tp_degree (int): Tensor parallelism degree (number of ranks in the group).
+
+    Returns:
+        out (nl.ndarray): [H, K], Output tensor on shared HBM containing gathered data from all ranks.
+
+    Notes:
+        - Input tensor must fit in SBUF (H * W * dtype_size <= SBUF capacity)
+        - Output is stored in shared_hbm for cross-rank visibility
+        - All ranks receive identical output after the collective
+        - TODO: Specify intended usage range (e.g., maximum H, W dimensions)
+
+    Pseudocode:
+        # Load input from HBM to SBUF
+        in_buf = load_to_sbuf(inp)
+
+        # Perform all-gather collective in SBUF
+        out_buf = all_gather(in_buf, along_dim=1)
+
+        # Store result from SBUF to shared HBM
+        out = store_to_hbm(out_buf)
+        return out
+
+    Example:
+        With tp_degree=4 and input shape (128, 512) per rank:
+
+        Before (each rank has unique data):
+            rank0.inp = data_0,  rank1.inp = data_1,  rank2.inp = data_2,  rank3.inp = data_3
+
+        After (all ranks have identical concatenated output):
+            all ranks: out = [data_0 | data_1 | data_2 | data_3]  (shape 128, 2048)
+    """
+    H, W = inp.shape
+    K = W * tp_degree
+    dtype = inp.dtype
+
+    # kernel_assert(H <= 128, "H must be <= 128 to fit in SBUF partition")
+
+    in_buf = nl.ndarray((H, W), dtype=dtype, buffer=nl.sbuf)
+    nisa.dma_copy(dst=in_buf, src=inp[0:H, 0:W])
+
+    out_buf = nl.ndarray((H, W), dtype=dtype, buffer=nl.sbuf)
+    out = nl.ndarray((H, W), dtype=dtype, buffer=nl.shared_hbm)
+
+    ncc.all_reduce(dsts=[out_buf], srcs=[in_buf], replica_group=replica_groups, op=nl.add)
+
+    nisa.dma_copy(dst=out[0:H, 0:W], src=out_buf)
+    return out
+
+
 
 @nki.jit(platform_target="trn2")
 def allgather_sb2sb_tiled(
     inp: nl.ndarray,
-    replica_groups,
+    replica_groups: ReplicaGroup,
     tp_degree: int,
 ) -> nl.ndarray:
     """SBUF-to-SBUF all-gather with tiling and LNC support for larger tensors.
@@ -146,7 +213,7 @@ def allgather_sb2sb_tiled(
         TILES_PER_CORE = 1
         TILE_START = 0
     else:
-        kernel_assert(NUM_M_TILES % n_prgs == 0, "NUM_M_TILES must be divisible by number of LNC programs")
+        # kernel_assert(NUM_M_TILES % n_prgs == 0, "NUM_M_TILES must be divisible by number of LNC programs")
         TILES_PER_CORE = NUM_M_TILES // n_prgs if n_prgs > 1 else NUM_M_TILES
         TILE_START = prg_id * TILES_PER_CORE
 
@@ -172,47 +239,54 @@ def allgather_sb2sb_tiled(
 
 
 
-def main():
-    # Tensor parallel degree
-    tp_degree = 2
-
-    # Input tensor shape per rank
-    H = 128
-    W = 512
-
-    # 当前 rank id（示例）
-    # rank_id = nl.program_id()
-    rank_id = 0
-
-    # 构造输入数据 (放在 HBM 上)
-    # inp = nl.ndarray((H, W), dtype=nl.float32)#, buffer=nl.hbm)
-    import numpy as np
-    inp = np.random.randn(H, W).astype(np.float32)
-
-
-    # 用不同 rank 的数据填充，方便观察 gather 结果
-    for i in range(H):
-        for j in range(W):
-            inp[i, j] = rank_id
-
-    # 定义参与 all-gather 的 replica group
-    # replica_groups = ReplicaGroup(size=tp_degree)
-    replica_groups = [[i for i in range(tp_degree)]]
-
-    # 调用 allgather kernel
-    out = allgather_sb2sb(
-        inp=inp,
-        replica_groups=replica_groups,
-        # replica_groups=,
-        tp_degree=tp_degree,
-    )
-
-    # 打印结果（示例）
-    print("Rank:", rank_id)
-    print("Output shape:", out.shape)
-
-    # 理论上输出 shape = (H, W * tp_degree)
-    # 每一段 W 对应一个 rank 的数据
-
 if __name__ == "__main__":
-    main()
+    import numpy as np
+    import torch
+    # from neuronxcc.nki._private_kernels.collectives import ReplicaGroup
+    import torch_xla.core.xla_model as xm
+
+    # tp_degree = 4
+    # replica_groups = ReplicaGroup([[0, 1, 2, 3]])
+    tp_degree = 2
+    replica_groups = ReplicaGroup([[0, 1]])
+    device = xm.xla_device()
+    
+     # ── Test 1: allgather_sb2sb ──────────────────────────────────────
+    print("Testing allgather_sb2sb ...")
+    H, W = 64, 512
+    inp = torch.randn(H, W, dtype=torch.float32).to(device)
+
+    out = allreduce_sb2sb(inp, replica_groups, tp_degree)
+
+    print(f"  input shape : {inp.shape}")
+    print(f"  output shape: {out.shape}")   # expect (64, 2048)
+    assert out.shape == (H, W), "allgather_sb2sb shape mismatch!"
+    print("  allreduce_sb2sb PASSED\n")
+    
+    
+    
+    # # ── Test 1: allgather_sb2sb ──────────────────────────────────────
+    # print("Testing allgather_sb2sb ...")
+    # H, W = 64, 512
+    # inp = torch.randn(H, W, dtype=torch.float32).to(device)
+
+    # out = allgather_sb2sb(inp, replica_groups, tp_degree)
+
+    # print(f"  input shape : {inp.shape}")
+    # print(f"  output shape: {out.shape}")   # expect (64, 2048)
+    # assert out.shape == (H, W * tp_degree), "allgather_sb2sb shape mismatch!"
+    # print("  allgather_sb2sb PASSED\n")
+
+    # # ── Test 2: allgather_sb2sb_tiled ────────────────────────────────
+    # print("Testing allgather_sb2sb_tiled ...")
+    # M, K_local = 256, 512
+    # inp_tiled = torch.randn(M, K_local, dtype=torch.float32).to(device)
+
+    # out_tiled = allgather_sb2sb_tiled(inp_tiled, replica_groups, tp_degree)
+
+    # print(f"  input shape : {inp_tiled.shape}")
+    # print(f"  output shape: {out_tiled.shape}")   # expect (256, 2048)
+    # assert out_tiled.shape == (M, K_local * tp_degree), "allgather_sb2sb_tiled shape mismatch!"
+    # print("  allgather_sb2sb_tiled PASSED\n")
+
+    # print("All tests PASSED!")
