@@ -24,9 +24,9 @@ from neuronx_distributed_inference.utils.benchmark import create_submodule_laten
 from neuronx_distributed_inference.models.llama import modeling_llama as baseline_llama
 
 # Load the model for ASPLOS contest
-from llama2 import NeuronLlamaForCausalLM
+# from llama2 import NeuronLlamaForCausalLM
 
-# from llama_svd import NeuronLlamaForCausalLM
+from llama_svd import NeuronLlamaForCausalLM
 import importlib
 from test import *
 
