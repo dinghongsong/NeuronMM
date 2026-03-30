@@ -3497,7 +3497,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
         del kwargs['seq_len'] 
         del kwargs['residual'] 
         del kwargs['local_mask'] 
-        del kwargs['windowed_context_encoding_window_idx'] 
+        # del kwargs['windowed_context_encoding_window_idx'] 
         del kwargs['padding_mask'] 
         del kwargs['tile_q_indices'] 
         del kwargs['tile_block_tables'] 

@@ -3,17 +3,22 @@
 ## Setup Steps
 
 1. Create a Trainium instance using AWS EC2 with the following settings:
+    1. **AMI:** **Deep Learning AMI Neuron (Ubuntu 22.04) 20250919 ami-038e60c7ef3b0faa3**
+    2. **Instance type:** trn2.3xlarge
+    3. **Key pair (login):** create a new key pair
+
+
+    
+<!-- 1. Create a Trainium instance using AWS EC2 with the following settings:
     1. **AMI:** **Deep Learning AMI Neuron (Ubuntu 22.04) 20250404**
     2. **Instance type:** trn1.2xlarge
-    3. **Key pair (login):** create a new key pair
+    3. **Key pair (login):** create a new key pair -->
 
 2. Activate the Neuron virtual environment
 
     ```
-    vi ~/.bashrc
 
-    # Add the following command to the end of ~/.bashrc.
-    source  /opt/aws_neuronx_venv_pytorch_2_5_nxd_inference/bin/activate
+    echo 'source /opt/aws_neuronx_venv_pytorch_2_8_nxd_inference/bin/activate' | sudo tee -a ~/.bashrc
 
     source ~/.bashrc
 
@@ -28,7 +33,7 @@
 4. Download repo:
 
 ```
-git clone -b baseline --single-branch https://github.com/dinghongsong/NeuronMM.git
+git clone -b trn2 --single-branch https://github.com/dinghongsong/NeuronMM.git
 
 cd NeuronMM
 

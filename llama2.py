@@ -154,7 +154,9 @@ from neuronx_distributed_inference.modules.attention.utils import (    apply_rot
     manual_softmax,
     move_heads_front,
     repeat_kv)
-from neuronx_distributed_inference.modules.attention.attention_base import (NeuronAttentionBase, FlashAttentionStrategy, _flash_fwd_call_bir )
+# from neuronx_distributed_inference.modules.attention.attention_base import (NeuronAttentionBase, FlashAttentionStrategy, _flash_fwd_call_bir )
+from neuronx_distributed_inference.modules.attention.attention_base import (NeuronAttentionBase, FlashAttentionStrategy )
+
 from torch import Tensor, nn
 
 _LLAMA_MODULE_MAP = {}
@@ -2919,23 +2921,25 @@ class NeuronLlamaAttention(NeuronLlamaAttentionBase):
             if flash_attn_strategy == FlashAttentionStrategy.SHARDED_KERNEL:
                 grid = (vnc(self.logical_neuron_cores),)
 
-                _flash_fwd_call_bir[grid](
-                    Q,
-                    K_active,
-                    V_active,
-                    1.0,
-                    attn_output,
-                    kernel_name="CausalAttentionMMSoftmaxMMWithoutSwap",
-                )
+                # _flash_fwd_call_bir[grid](
+                #     Q,
+                #     K_active,
+                #     V_active,
+                #     1.0,
+                #     attn_output,
+                #     kernel_name="CausalAttentionMMSoftmaxMMWithoutSwap",
+                # )
+                pass
             elif flash_attn_strategy == FlashAttentionStrategy.UNSHARDED_KERNEL:
-                _flash_fwd_call_bir(
-                    Q,
-                    K_active,
-                    V_active,
-                    1.0,
-                    attn_output,
-                    kernel_name="CausalAttentionMMSoftmaxMMWithoutSwap",
-                )
+                # _flash_fwd_call_bir(
+                #     Q,
+                #     K_active,
+                #     V_active,
+                #     1.0,
+                #     attn_output,
+                #     kernel_name="CausalAttentionMMSoftmaxMMWithoutSwap",
+                # )
+                pass
             else:
                 raise ValueError(f"Invalid flash attention strategy: {flash_attn_strategy}")
 
