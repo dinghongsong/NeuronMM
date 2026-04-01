@@ -1823,7 +1823,8 @@ class NeuronLlamaMLP_SVD(nn.Module):
         ############################################ SVD-Flash
         # self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
         # self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
-        self.low_rank = round(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        # self.low_rank = round(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        self.low_rank = int(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size))) 
 
         ############################################
         if self.neuron_config.quantized_mlp_kernel_enabled and self.quantize_clamp_bound == float(
@@ -3497,7 +3498,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
         del kwargs['seq_len'] 
         del kwargs['residual'] 
         del kwargs['local_mask'] 
-        # del kwargs['windowed_context_encoding_window_idx'] 
+        del kwargs['windowed_context_encoding_window_idx'] 
         del kwargs['padding_mask'] 
         del kwargs['tile_q_indices'] 
         del kwargs['tile_block_tables'] 
@@ -3511,7 +3512,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
         # del kwargs['seq_len'] 
         # del kwargs['seq_len'] 
         # del kwargs['seq_len'] 
-        print("kwargs :", kwargs)
+        # print("kwargs :", kwargs)
         print("####################")
         
         hidden_states, present_key_value, cos_cache, sin_cache = self.self_attn(

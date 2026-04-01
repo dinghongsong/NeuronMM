@@ -3,22 +3,15 @@
 ## Setup Steps
 
 1. Create a Trainium instance using AWS EC2 with the following settings:
-    1. **AMI:** **Deep Learning AMI Neuron (Ubuntu 22.04) 20250919 ami-038e60c7ef3b0faa3**
+    1. **AMI:** **Deep Learning AMI Neuron (Ubuntu 24.04)**
     2. **Instance type:** trn2.3xlarge
     3. **Key pair (login):** create a new key pair
-
-
-    
-<!-- 1. Create a Trainium instance using AWS EC2 with the following settings:
-    1. **AMI:** **Deep Learning AMI Neuron (Ubuntu 22.04) 20250404**
-    2. **Instance type:** trn1.2xlarge
-    3. **Key pair (login):** create a new key pair -->
 
 2. Activate the Neuron virtual environment
 
     ```
 
-    echo 'source /opt/aws_neuronx_venv_pytorch_2_8_nxd_inference/bin/activate' | sudo tee -a ~/.bashrc
+    echo 'source /opt/aws_neuronx_venv_pytorch_2_9_nxd_inference/bin/activate' | sudo tee -a ~/.bashrc
 
     source ~/.bashrc
 
@@ -28,6 +21,8 @@
 
 ```
    huggingface-cli download --token  <your_token> meta-llama/Llama-3.2-1B --local-dir /home/ubuntu/models/llama-3.2-1b/
+
+   huggingface-cli download Macro2017/llama-3.2-1b_0.8_svd --local-dir /home/ubuntu/models/llama-3.2-1b_0.8_svd
 ```
 
 4. Download repo:
@@ -37,41 +32,75 @@ git clone -b trn2 --single-branch https://github.com/dinghongsong/NeuronMM.git
 
 cd NeuronMM
 
-python main.py --enable-nki --mode evaluate_all --seq-len 2048 --context-encoding-buckets 1024 --tp-degree 2
+# run svd
+
+python main.py --enable-nki --mode evaluate_all --seq-len 2048 --context-encoding-buckets 1024 --tp-degree 4 --model-path /home/ubuntu/models/llama-3.2-1b_0.8_svd/
+
+
+# run baseline
+
+python main.py --enable-nki --mode evaluate_all --seq-len 2048 --context-encoding-buckets 1024 --tp-degree 4
+
+python main.py --enable-nki --mode evaluate_all --seq-len 256 --context-encoding-buckets 128 --tp-degree 4
 
 
 ```
 
 
 
+5. InfluxDB2 Installation 
 
-6. profile
 
 
 
 ```
 # install influxdb2
+# Download the InfluxDB CLI client
 wget https://dl.influxdata.com/influxdb/releases/influxdb2-client-2.7.5-linux-amd64.tar.gz
 tar xvfz influxdb2-client-2.7.5-linux-amd64.tar.gz
 sudo mv influx /usr/local/bin/
+
+# Import the GPG signing key from keyserver
+sudo gpg --keyserver keyserver.ubuntu.com --recv-keys DA61C26A0585BD3B
+sudo gpg --export DA61C26A0585BD3B | sudo tee /etc/apt/trusted.gpg.d/influxdata-archive_compat.gpg > /dev/null
+
+# Add the InfluxData repository to apt sources
+echo 'deb [signed-by=/etc/apt/trusted.gpg.d/influxdata-archive_compat.gpg] https://repos.influxdata.com/debian stable main' \
+  | sudo tee /etc/apt/sources.list.d/influxdata.list
+
+# Update package list and install influxdb2
+sudo apt-get update && sudo apt-get install -y influxdb2
+
+# Start InfluxDB and enable it on boot
+sudo systemctl start influxdb
+sudo systemctl enable influxdb
+
+# Verify the service is running
+sudo systemctl status influxdb
+
+# Confirm port 8086 is listening
+ss -tlnp | grep 8086
+
+# Create admin user, organization, and default bucket
 influx setup \
   --username admin \
   --password admin123 \
   --org myorg \
   --bucket mybucket \
   --force
+```
 
 
-
-
+6. profile
+```
 ls /tmp/nxd_model/
 
 
-neuron-profile capture -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_5.ntff --profile-nth-exec=2  
+neuron-profile capture -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile.ntff --profile-nth-exec=2  
+
+neuron-profile view -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_rank_0_exec_2.ntff 
 
 
-
-neuron-profile view -n  /tmp/nxd_model/context_encoding_model/_tp0_bk0/graph.neff -s profile_5_rank_0_exec_2.ntff 
 ```
 
 

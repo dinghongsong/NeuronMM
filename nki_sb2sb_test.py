@@ -244,11 +244,13 @@ if __name__ == "__main__":
     import torch
     # from neuronxcc.nki._private_kernels.collectives import ReplicaGroup
     import torch_xla.core.xla_model as xm
+    
+    # torchrun --nproc_per_node=4 nki_sb2sb_test.py 
 
-    # tp_degree = 4
-    # replica_groups = ReplicaGroup([[0, 1, 2, 3]])
-    tp_degree = 2
-    replica_groups = ReplicaGroup([[0, 1]])
+    tp_degree = 4
+    replica_groups = ReplicaGroup([[0, 1, 2, 3]])
+    # tp_degree = 2
+    # replica_groups = ReplicaGroup([[0, 1]])
     device = xm.xla_device()
     
      # ── Test 1: allgather_sb2sb ──────────────────────────────────────
