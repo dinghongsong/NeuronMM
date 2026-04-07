@@ -7,7 +7,7 @@ import json
 import os
 import time
 import torch
-
+import csv
 from torch_neuronx.pyhlo.hlo_pb2 import HloModuleProto
 from torch_neuronx.testing.validation import logit_validation
 from transformers import AutoTokenizer, GenerationConfig
@@ -24,14 +24,18 @@ from neuronx_distributed_inference.utils.benchmark import create_submodule_laten
 from neuronx_distributed_inference.models.llama import modeling_llama as baseline_llama
 
 # Load the model for ASPLOS contest
-from llama2 import NeuronLlamaForCausalLM
+# from llama2 import NeuronLlamaForCausalLM as NeuronLlamaForCausalLM_BASE
+from llama_base import NeuronLlamaForCausalLM as NeuronLlamaForCausalLM_BASE
+# from llama import NeuronLlamaForCausalLM
 
-# from llama_svd import NeuronLlamaForCausalLM
+from llama_svd import NeuronLlamaForCausalLM
+# from llama_svd_ori import NeuronLlamaForCausalLM
 import importlib
 from test import *
 
 BENCHMARK_REPORT_FILENAME = "benchmark_report.json"
 set_random_seed(0)
+
 
 
 def parse_args():
@@ -46,8 +50,8 @@ def parse_args():
 
     # Model path
     parser.add_argument("--model-path", type=str, default="/home/ubuntu/models/llama-3.2-1b/")
-    parser.add_argument("--compiled-model-path", type=str,
-                        default="/home/ubuntu/traced_model/llama-3.2-1b/")
+    parser.add_argument("--svd-model-path", type=str, default="/home/ubuntu/models/llama-3.2-1b_0.8_svd/")
+    parser.add_argument("--compiled-model-path", type=str, default="/home/ubuntu/traced_model/llama-3.2-1b/")
 
     # Evaluation
     parser.add_argument("--benchmark", action="store_true")
@@ -123,7 +127,14 @@ def load_tokenizer(model_path, compiled_model_path, neuron_config):
     return tokenizer
 
 
-def prepare_inference(model_cls, args):
+def prepare_inference(model_cls, args, svd=False):
+    
+   
+
+    if svd is True:
+        args.model_path = args.svd_model_path
+
+        
     # Initialize configs.
     print("Loading configs...")
 
@@ -273,11 +284,11 @@ def benchmark_sampling(model, tokenizer, generation_config, prompts):
     
     model.reset()
 
-    print("Benchmark completed and its result is as following")
-    print(json.dumps(report, indent=4))
-    with open(BENCHMARK_REPORT_FILENAME, "w") as f:
-        json.dump(report, f)
-    print("Completed saving result to " + BENCHMARK_REPORT_FILENAME)
+    # print("Benchmark completed and its result is as following")
+    # print(json.dumps(report, indent=4))
+    # with open(BENCHMARK_REPORT_FILENAME, "w") as f:
+    #     json.dump(report, f)
+    # print("Completed saving result to " + BENCHMARK_REPORT_FILENAME)
 
     return report
 
@@ -545,65 +556,32 @@ def calculate_score(base_latency, base_throughput, accuracy, latency, throughput
 
 def main():
     args = parse_args()
+    
     if not args.prompts:
-        args.prompts = ["I believe the meaning of life is"]
+        prompts = parse_prompts("prompts.txt")
+        args.prompts = prompts
+    
     args.batch_size = len(args.prompts)
     args.max_length = args.seq_len
-    args.tol_map = "{None: (1e-5, 0.05), 1000: (1e-5, 0.03), 50: (1e-5, 0.03), 5: (1e-5, 0.03)}"
+    # args.tol_map = "{None: (1e-5, 0.05), 1000: (1e-5, 0.03), 50: (1e-5, 0.03), 5: (1e-5, 0.03)}"
     
     
-    model, tokenizer, generation_config = prepare_inference(NeuronLlamaForCausalLM, args)
-
-
+    model_base, tokenizer_base, generation_config_base = prepare_inference(NeuronLlamaForCausalLM_BASE, args)
+    report_wo_svd = benchmark_sampling(model_base, tokenizer_base, generation_config_base, args.prompts)
+    
+    model, tokenizer, generation_config = prepare_inference(NeuronLlamaForCausalLM, args, svd=True)
+    report_svd = benchmark_sampling(model, tokenizer, generation_config, args.prompts)
+    
+    print("========= baseline ===========")
+    print(json.dumps(report_wo_svd, indent=4))
+    print("========= with svd ===========")
+    print(json.dumps(report_svd, indent=4))
     
 
-    prompts = parse_prompts("prompts.txt")
-    prompt_data = parse_prompt_data("prompt_data.txt")
-    assert len(prompts) == len(prompt_data)
-
-    total_score = 0
-
-    # Iterate through the prompts
-    for i, prompt in enumerate(prompts):
-        data = prompt_data[i]
-        base_latency = float(data[3])
-        base_throughput = float(data[4])
-        
-        # accuracy = run_accuracy_check(
-        #         model,
-        #         generation_config,
-        #         model,
-        #         tokenizer,
-        #         generation_config,
-        #         [prompt],
-        #         args.divergence_difference_tol,
-        #         args.tol_map,
-        #         num_tokens_to_check=args.num_tokens_to_check,
-        #     )
-        
-        accuracy = 1
-       
-
-        report = benchmark_sampling(model, tokenizer, generation_config, [prompt])
-
-        latency = report["e2e_model"]["latency_ms_p99"]
-        throughput = report["e2e_model"]["throughput"]
-
-        nki_flop_ratio = count_nki_flop_ratio()
-
-        score = calculate_score(base_latency, base_throughput, accuracy, latency, throughput, nki_flop_ratio)
-        print(
-            f"Prompt: {prompt}\n"
-            f"Final Score: {score}\n"
-            f"\tAccuracy: {accuracy}\n"
-            f"\tLatency: {latency}\n"
-            f"\tThroughput: {throughput}\n"
-            f"\tNKI FLOPs Ratio: {nki_flop_ratio}"
-        )
-        total_score += score
-
-    print(f"\nTotal Score: {total_score}\n")
-
+    print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"])
+    print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"])
+    print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"])
+    
     
 
 

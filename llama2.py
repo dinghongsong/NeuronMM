@@ -3328,4 +3328,16 @@ class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
     @classmethod
     def get_config_cls(cls):
         return LlamaInferenceConfig
+    
+    
+    def get_compiler_args(self) -> str:
+        import sys
+        print(f"[DEBUG] get_compiler_args called on {self.__class__.__name__}", flush=True, file=sys.stderr)
 
+        return (
+            "--auto-cast=none --model-type=transformer "
+            f"--tensorizer-options='--enable-ccop-compute-overlap "
+            f"--cc-pipeline-tiling-factor={self.neuron_config.cc_pipeline_tiling_factor}'"
+            f" --lnc={self.neuron_config.logical_nc_config}"
+            " -O1"
+        )

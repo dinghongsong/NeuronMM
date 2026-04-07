@@ -39,13 +39,20 @@ from torch.distributed import ProcessGroup
 import gc
 import logging
 import math
+import numpy as np
 from typing import List, Optional, Tuple, Type
+
+
 import neuronxcc.nki as nki
 import neuronxcc.nki.isa as nisa
 import neuronxcc.nki.language as nl
 import neuronxcc.nki.typing as nt
-import numpy as np
 from neuronxcc.nki.language import par_dim
+
+# import nki
+# import nki.language as nl
+# import nki.isa as nisa
+# import nki.collectives as ncc
 
 import torch
 from neuronx_distributed.parallel_layers import parallel_state  # noqa: E402
@@ -1823,8 +1830,8 @@ class NeuronLlamaMLP_SVD(nn.Module):
         ############################################ SVD-Flash
         # self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
         # self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
-        # self.low_rank = round(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size) * 128)) * 128
-        self.low_rank = int(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size))) 
+        self.low_rank = round(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        # self.low_rank = int(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size))) 
 
         ############################################
         if self.neuron_config.quantized_mlp_kernel_enabled and self.quantize_clamp_bound == float(
@@ -2030,273 +2037,7 @@ class NeuronLlamaMLP_SVD(nn.Module):
             self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=mlp_bias)
             self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=mlp_bias)
 
-    # def _kernel_enabled_quantized_mlp(self, x, rmsnorm, residual, adapter_ids):
-    #     full_seqlen = x.shape[1] * (self.config.neuron_config.tp_degree if self.sequence_parallel_enabled else 1)
-    #     if full_seqlen <= self.neuron_config.seq_len_threshold_for_cc_tiling:  # Keep regular grid for TKG.
-    #         grid = (nc(self.logical_nc_config),)
-    #     else:  # Add CC pipelining dim for CTE kernel grid
-    #         grid = (CCPipeline(self.neuron_config.cc_pipeline_tiling_factor) * nc(self.logical_nc_config),)
-    #     fused_residual = residual is not None
-    #     fused_rmsnorm = rmsnorm is not None
-    #     logger.debug(
-    #         f"MLP: quantized kernel, fused_residual={fused_residual}, fused_rmsnorm={fused_rmsnorm}, logical_nc_config={self.logical_nc_config}"
-    #     )
-
-    #     # Can't do residual add in the kernel if SP is enabled
-    #     if fused_residual:
-    #         assert (
-    #             not self.sequence_parallel_enabled
-    #         ), "Quantized MLP cannot have both fused residual add and sequence parallel RMSnorm!"
-    #         # Using fused residual add
-    #         _mlp_fwd_call = nki_jit()(quant_mlp_fused_add_isa_kernel)
-    #     else:
-    #         _mlp_fwd_call = nki_jit()(quant_mlp_isa_kernel)
-
-    #     if fused_rmsnorm:
-    #         ln_w = rmsnorm.weight.unsqueeze(0)
-    #     else:
-    #         ln_w = torch.zeros(size=(1, self.hidden_size), dtype=x.dtype, device=x.device)
-
-    #     # Handle SP RMSnorm
-    #     x_orig_dtype = x.dtype
-    #     if self.sequence_parallel_enabled:
-    #         # This RMSNormQuant kernel will do quantization inside, so we pass the
-    #         # clamp_bound for clipping.
-    #         # If we don't use this kernel, the MLP kernel below will do the
-    #         # quantization, so we also pass clamp_bound to that kernel.
-    #         if self.rmsnorm_quantize_kernel_enabled:
-    #             logger.debug(
-    #                 "Running Quantized MLP kernel with sequence-parallel RMSnorm-Quantize kernel!"
-    #             )
-    #             _rmsnorm_quant_fwd_call = nki_jit()(rmsnorm_quant_isa_kernel)
-    #             quant_rmsnorm_out = torch.zeros(
-    #                 size=(
-    #                     x.shape[0],  # batch size
-    #                     x.shape[1],  # sequence length
-    #                     x.shape[2] + 4,  # hidden size + 4 bytes for packing fp32 scale
-    #                 ),
-    #                 dtype=torch.int8,
-    #                 device=x.device,
-    #             )
-    #             clamp_bound = self.quantize_clamp_bound
-    #             _rmsnorm_quant_fwd_call[grid](
-    #                 x, ln_w, clamp_bound, quant_rmsnorm_out, kernel_name="QuantOnly"
-    #             )
-    #             x = gather_from_sequence_parallel_region(
-    #                 quant_rmsnorm_out,
-    #                 self.sequence_dimension,
-    #                 process_group=get_tp_group(self.config),
-    #                 tile_cc=self.neuron_config.tile_cc,
-    #             )
-
-    #         else:
-    #             logger.debug(
-    #                 "Running Quantized MLP kernel with external (native compiler) sequence-parallel RMSnorm!"
-    #             )
-    #             x = gather_from_sequence_parallel_region(
-    #                 x, self.sequence_dimension, process_group=get_tp_group(self.config), tile_cc=self.neuron_config.tile_cc
-    #             )
-
-    #     # Build output tensor
-    #     output_tensor_seqlen = x.shape[1]
-    #     output_tensor = torch.zeros(
-    #         size=(
-    #             x.shape[0],  # batch size
-    #             output_tensor_seqlen,
-    #             self.hidden_size,  # hidden size
-    #         ),
-    #         dtype=x_orig_dtype,
-    #         device=x.device,
-    #     )
-
-    #     # Grab weights
-    #     # all weights of the layers are stored in (out, in) shape
-    #     # unsqueeze so that shape of RMS gamma weight is [1, hidden] instead of [hidden]
-    #     gate_w = self.gate_proj.weight.data
-    #     gate_w_scale = self.gate_proj.scale
-    #     up_w = self.up_proj.weight.data
-    #     up_w_scale = self.up_proj.scale
-    #     down_w = self.down_proj.weight.data
-    #     down_w_scale = self.down_proj.scale
-    #     clamp_bound = self.quantize_clamp_bound
-
-    #     if fused_residual:
-    #         residual_output_tensor = torch.zeros(
-    #             size=(
-    #                 x.shape[0],  # batch size
-    #                 output_tensor_seqlen,
-    #                 self.hidden_size,  # hidden size
-    #             ),
-    #             dtype=x.dtype,
-    #             device=x.device,
-    #         )
-
-    #         _mlp_fwd_call[grid](
-    #             x,  # attn_output
-    #             residual,  # hidden
-    #             ln_w,  # ln_w
-    #             gate_w,  # gate_w
-    #             gate_w_scale,
-    #             up_w,  # up_w
-    #             up_w_scale,
-    #             down_w,  # down_w
-    #             down_w_scale,
-    #             clamp_bound,
-    #             output_tensor,  # out
-    #             add_out=residual_output_tensor,
-    #             fused_rmsnorm=fused_rmsnorm,
-    #             eps=self.rms_norm_eps,
-    #             kernel_name="MLP",
-    #             store_add=True,
-    #         )
-    #         residual = residual_output_tensor
-    #     else:
-    #         _mlp_fwd_call[grid](
-    #             x,  # hidden
-    #             # should be fine to pass gamma is as a dummy even if not using fused rmsnorm
-    #             ln_w,
-    #             gate_w,  # gate_w
-    #             gate_w_scale,
-    #             up_w,  # up_w
-    #             up_w_scale,
-    #             down_w,  # down_w
-    #             down_w_scale,
-    #             clamp_bound,
-    #             output_tensor,  # out
-    #             # Run RMSNorm inside the kernel if NOT using SP rmsnorm
-    #             fused_rmsnorm=fused_rmsnorm,
-    #             eps=self.rms_norm_eps,
-    #             kernel_name="MLP",
-    #         )
-    #         residual = None
-
-    #     # # All-reduce or reduce-scatter, depending on whether SP is enabled
-    #     # if self.sequence_parallel_enabled:
-    #     #     if self.neuron_config.tile_cc:
-    #     #         output_tensor = reduce_scatter_to_sequence_parallel_region_tiled(
-    #     #             output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-    #     #         )
-    #     #     else:
-    #     #         output_tensor = reduce_scatter_to_sequence_parallel_region(
-    #     #             output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-    #     #         )
-    #     # else:
-    #     #     output_tensor = reduce_from_tensor_model_parallel_region(output_tensor)
-
-    #     logger.debug(f"Quantized MLP output shape {output_tensor.shape}")
-    #     return (output_tensor, residual)
-
-    # def _kernel_enabled_mlp(self, x, rmsnorm, residual, adapter_ids):
-    #     fused_residual = residual is not None
-    #     fused_rmsnorm = rmsnorm is not None
-    #     logger.debug(
-    #         f"MLP: kernel, fused_residual={fused_residual}, fused_rmsnorm={fused_rmsnorm}, skip_gamma={self.fused_rmsnorm_skip_gamma}, logical_nc_config={self.logical_nc_config}"
-    #     )
-
-    #     # Choose which kernel to call
-    #     if fused_residual:
-    #         assert (
-    #             not self.sequence_parallel_enabled
-    #         ), "MLP kernel cannot have both fused residual add and sequence parallel RMSnorm!"
-    #         # Using fused residual add
-    #         _mlp_fwd_call = nki_jit()(mlp_fused_add_isa_kernel)
-    #     else:
-    #         _mlp_fwd_call = nki_jit()(mlp_isa_kernel)
-
-    #     if self.sequence_parallel_enabled:
-    #         x = gather_from_sequence_parallel_region(
-    #             x, self.sequence_dimension, process_group=get_tp_group(self.config), tile_cc=self.neuron_config.tile_cc
-    #         )
-
-    #     # Build output tensor
-    #     output_tensor_seqlen = x.shape[1]
-    #     output_tensor = torch.zeros(
-    #         size=(
-    #             x.shape[0],  # batch size
-    #             output_tensor_seqlen,
-    #             self.hidden_size,  # hidden size
-    #         ),
-    #         dtype=x.dtype,
-    #         device=x.device,
-    #     )
-
-    #     # Grab weights
-    #     # all weights of the layers are stored in (out, in) shape
-    #     # unsqueeze so that shape of RMS gamma weight is [1, hidden] instead of [hidden]
-    #     if fused_rmsnorm:
-    #         ln_w = rmsnorm.weight.unsqueeze(0)
-    #     else:
-    #         ln_w = torch.zeros(size=(1, self.hidden_size), dtype=x.dtype, device=x.device)
-    #     gate_w = self.gate_proj.weight.data
-    #     up_w = self.up_proj.weight.data
-    #     down_w = self.down_proj.weight.data
-
-    #     if output_tensor_seqlen <= self.neuron_config.seq_len_threshold_for_cc_tiling:  # Keep regular grid for TKG. Messes up the MLP impl
-    #         grid = (nc(self.logical_nc_config),)
-    #     else:  # Add CC pipelining dim for CTE kernel grid
-    #         grid = (CCPipeline(self.neuron_config.cc_pipeline_tiling_factor) * nc(self.logical_nc_config),)
-
-    #     if fused_residual:
-    #         residual_output_tensor = torch.zeros(
-    #             size=(
-    #                 x.shape[0],  # batch size
-    #                 output_tensor_seqlen,
-    #                 self.hidden_size,  # hidden size
-    #             ),
-    #             dtype=x.dtype,
-    #             device=x.device,
-    #         )
-
-    #         _mlp_fwd_call[grid](
-    #             x,  # attn_output
-    #             residual,  # hidden
-    #             ln_w,  # ln_w
-    #             gate_w,  # gate_w
-    #             up_w,  # up_w
-    #             down_w,  # down_w
-    #             output_tensor,  # out
-    #             kernel_name="MLP",
-    #             add_out=residual_output_tensor,
-    #             fused_rmsnorm=fused_rmsnorm,
-    #             skip_gamma=self.fused_rmsnorm_skip_gamma,
-    #             eps=self.rms_norm_eps,
-    #             store_add=True,
-    #         )
-    #         residual = residual_output_tensor
-    #     else:
-    #         _mlp_fwd_call[grid](
-    #             x,  # hidden
-    #             # should be fine to pass gamma is as a dummy even if not using fused rmsnorm
-    #             ln_w,
-    #             gate_w,
-    #             up_w,
-    #             down_w,
-    #             output_tensor,  # out
-    #             kernel_name="MLP",
-    #             # Run RMSNorm inside the kernel if NOT using SP rmsnorm
-    #             fused_rmsnorm=fused_rmsnorm,
-    #             skip_gamma=self.fused_rmsnorm_skip_gamma,
-    #             eps=self.rms_norm_eps,
-    #         )
-    #         residual = None
-
-    #     # # All-reduce or reduce-scatter, depending on whether SP is enabled
-    #     # if self.sequence_parallel_enabled:
-    #     #     if self.neuron_config.tile_cc:
-    #     #         output_tensor = reduce_scatter_to_sequence_parallel_region_tiled(
-    #     #             output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-    #     #         )
-    #     #     else:
-    #     #         output_tensor = reduce_scatter_to_sequence_parallel_region(
-    #     #             output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-    #     #         )
-    #     # else:
-    #     #     output_tensor = reduce_from_tensor_model_parallel_region(
-    #     #         output_tensor, process_group=get_tp_group(self.config)
-    #     #     )
-
-    #     logger.debug(f"MLP output shape {output_tensor.shape}")
-    #     return (output_tensor, residual)
+    
 
     def _native_mlp(self, x, adapter_ids=None):
         logger.debug("MLP: native compiler")
@@ -2327,14 +2068,18 @@ class NeuronLlamaMLP_SVD(nn.Module):
 
     def _neuron_mm(self, x):
 
-        logger.info("-"*30 + " neuron_mm mlp " + "-"*30)
+        # logger.info("-"*30 + " neuron_mm mlp " + "-"*30)
+        print("-"*30 + " neuron_mm mlp " + "-"*30)
+
 
         # up = self.up_u_proj(self.up_v_proj(x))
         # gate = self.gate_u_proj(self.gate_v_proj(x))
         # return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
         
         if ENABLE_TP:
-            logger.info("-"*30 + " ENABLE_TP " + "-"*30)
+            # logger.info("-"*30 + " ENABLE_TP " + "-"*30)
+            print("-"*30 + " ENABLE_TP " + "-"*30)
+            
             up = self.up_proj(x)
             gate = self.gate_proj(x)
             return self.down_proj(self.act_fn(gate) * up)
@@ -3357,114 +3102,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
         self.qkv_kernel_fused_rmsnorm = not self.sequence_parallel_enabled
         self.mlp_kernel_fused_rmsnorm = not self.sequence_parallel_enabled
 
-    # def forward(
-    #     self,
-    #     hidden_states: torch.Tensor,
-    #     attention_mask: Optional[torch.Tensor] = None,
-    #     position_ids: Optional[torch.LongTensor] = None,
-    #     past_key_value: Optional[Tuple[torch.Tensor]] = None,
-    #     adapter_ids=None,
-    #     rotary_position_ids: Optional[torch.LongTensor] = None,
-    #     residual: Optional[torch.Tensor] = None,  # residual from previous layer used by QKV
-    #     **kwargs,
-    # ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]], Optional[torch.FloatTensor], Optional[torch.FloatTensor], Optional[torch.FloatTensor]]:
-    #     entry_hidden_states = hidden_states
-
-    #     qkv_fused_rmsnorm = None
-    #     if self.input_layernorm:
-    #         if self.qkv_kernel_enabled and self.qkv_kernel_fused_rmsnorm:
-    #             qkv_fused_rmsnorm = self.input_layernorm
-    #         else:
-    #             hidden_states = self.input_layernorm(hidden_states)
-
-    #     # Self Attention
-    #     # produced another residual used by MLP
-    #     attn_output = self.self_attn(
-    #         hidden_states=hidden_states,
-    #         attention_mask=attention_mask,
-    #         position_ids=position_ids,
-    #         past_key_value=past_key_value,
-    #         adapter_ids=adapter_ids,
-    #         rmsnorm=qkv_fused_rmsnorm,
-    #         # rotary_position_ids=rotary_position_ids,
-    #         # residual=residual,
-    #         **kwargs,
-    #     )
-
-    #     # if attn_output.residual is None:
-    #     #     residual = entry_hidden_states  # input to attention
-    #     # else:
-    #     #     # residual will only be returned by attn/qkv if fuse add qkv kernel is enabled
-    #     #     assert self.qkv_kernel_fuse_residual_add, \
-    #     #         "residual add before qkv should be computed in the previous layer, \
-    #     #          unless qkv_kernel_fuse_residual_add is specified"
-    #     #     assert (
-    #     #         not self.sequence_parallel_enabled
-    #     #     ), "qkv_kernel_fuse_residual_add should be off when sequence parallelism is enabled"
-    #     #     assert (
-    #     #         self.qkv_kernel_enabled
-    #     #     ), "qkv_kernel_fuse_residual_add should be used with qkv_kernel_enabled"
-    #     #     residual = attn_output.residual
-        
-    #     residual = entry_hidden_states
-
-    #     hidden_states = attn_output.hidden_states
-    #     if self.mlp_kernel_enabled and self.mlp_kernel_fuse_residual_add:
-    #         assert (
-    #             not self.sequence_parallel_enabled
-    #         ), "mlp_kernel_fuse_residual_add should be off when sequence parallelism is enabled"
-    #         # First residual add handled in the MLP kernel
-    #         hidden_states, residual = self.mlp(
-    #             hidden_states,
-    #             rmsnorm=self.post_attention_layernorm,
-    #             residual=residual,
-    #             adapter_ids=adapter_ids,
-    #         )
-    #     else:
-    #         hidden_states = residual + hidden_states
-    #         residual = hidden_states
-
-    #         if self.mlp_kernel_enabled and self.mlp_kernel_fused_rmsnorm:
-    #             mlp_fused_rmsnorm = self.post_attention_layernorm
-    #         else:
-    #             hidden_states = self.post_attention_layernorm(hidden_states)
-    #             mlp_fused_rmsnorm = None
-
-    #         hidden_states, _ = self.mlp(
-    #             hidden_states,
-    #             rmsnorm=mlp_fused_rmsnorm,
-    #             adapter_ids=adapter_ids,
-    #         )
-
-    #     # if fuse residual add with qkv, we leave this add to the next layer's QKV
-    #     # unless it is the last layer in which case we add it here
-    #     if not self.qkv_kernel_fuse_residual_add:
-    #         hidden_states = residual + hidden_states
-    #         residual = None  # set to None to prevent it from being used again
-
-    #     # also return residual for QKV in the next layer
-    #     outputs = (hidden_states, attn_output.present_key_value, attn_output.cos_cache, attn_output.sin_cache, residual)
-    #     # # #################
-    #     # print(attn_output.present_key_value[0].cpu())
-    #     # from torch import Tensor
-    #     # from typing import Tuple
-    #     # B, H, T, D = 1, 8, 128, 128   # 举例
-    #     # k1 = torch.randn(B, H, T, D)
-    #     # v1 = torch.randn(B, H, T, D)
-    #     # kv: Tuple[Tensor, Tensor] = (k1, v1)
-        
-    #     # print(tuple(map(repr, kv)))
-
-    #     # # present_key_value_obj = (repr(present_key_value[0]), repr(present_key_value[1])) 
-    #     # cos_cache = torch.randn(B, T, D)
-    #     # sin_cache = torch.randn(B, T, D)
-        
-    #     # ##########################
-        
-        
-    #     return outputs
-
-
+   
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -3486,7 +3124,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
 
         # Self Attention
         
-        print("####################")
+        # print("####################")
         
         del kwargs['seq_ids']
         del kwargs['rotary_position_ids']
@@ -3513,7 +3151,7 @@ class NeuronLlamaDecoderLayer(nn.Module):
         # del kwargs['seq_len'] 
         # del kwargs['seq_len'] 
         # print("kwargs :", kwargs)
-        print("####################")
+        # print("####################")
         
         hidden_states, present_key_value, cos_cache, sin_cache = self.self_attn(
             hidden_states=hidden_states,

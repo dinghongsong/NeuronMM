@@ -18,7 +18,7 @@ import nki.collectives as ncc
 import nki.isa as nisa
 import nki.language as nl
 from nki.collectives import ReplicaGroup
-
+import torch_xla.core.xla_model as xm
 # from ...core.utils.kernel_assert import kernel_assert
 
 
@@ -96,7 +96,7 @@ def allgather_sb2sb(
 def allreduce_sb2sb(
     inp: nl.ndarray,
     replica_groups: ReplicaGroup,
-    tp_degree: int,
+    # tp_degree: int,
 ) -> nl.ndarray:
     """SBUF-to-SBUF all-gather kernel for gathering tensors across ranks.
 
@@ -258,7 +258,10 @@ if __name__ == "__main__":
     H, W = 64, 512
     inp = torch.randn(H, W, dtype=torch.float32).to(device)
 
-    out = allreduce_sb2sb(inp, replica_groups, tp_degree)
+    out = allreduce_sb2sb(inp, replica_groups)
+    
+    tensor_bucket = xm.all_reduce("sum", inp, groups=replica_groups, pin_layout=True)
+
 
     print(f"  input shape : {inp.shape}")
     print(f"  output shape: {out.shape}")   # expect (64, 2048)
