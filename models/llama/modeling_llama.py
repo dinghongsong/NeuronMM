@@ -2172,7 +2172,7 @@ class NkiLinearWithAsyncCommunication(LinearWithAsyncCommunication):
         # output = output.reshape(B, M, -1)
         #######################
     
-        print("output.shape: ", output.shape)
+        # print("output.shape: ", output.shape)
         if bias is not None:
             output = output + bias
         return output
@@ -2519,148 +2519,193 @@ class NeuronLlamaMLP_SVD(nn.Module):
             # )
             ############################################
             
-            if self.tp_degree > 1:
+            
+             
+            
+            self.gate_proj = SVDColumnParallelLinear(
+                self.hidden_size,
+                self.low_rank,
+                self.intermediate_size,
+                bias=mlp_bias,
+                gather_output=False,
+                dtype=config.neuron_config.torch_dtype,
+                pad=True,
+                sequence_parallel_enabled=False,
+                sequence_dimension=None,
+                tensor_model_parallel_group=get_tp_group(config),
+            )
+            
+            self.up_proj = SVDColumnParallelLinear(
+                self.hidden_size,
+                self.low_rank,
+                self.intermediate_size,
+                bias=mlp_bias,
+                gather_output=False,
+                dtype=config.neuron_config.torch_dtype,
+                pad=True,
+                sequence_parallel_enabled=False,
+                sequence_dimension=None,
+                tensor_model_parallel_group=get_tp_group(config),
+            )
+            
+            self.down_proj = SVDRowParallelLinear(
+                self.intermediate_size,
+                self.low_rank,
+                self.hidden_size,
+                bias=mlp_bias,
+                input_is_parallel=True,
+                dtype=config.neuron_config.torch_dtype,
+                pad=True,
+                sequence_parallel_enabled=self.sequence_parallel_enabled,
+                sequence_dimension=self.sequence_dimension,
+                tensor_model_parallel_group=get_tp_group(config),
+                reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+            )
+                    
+            ############################################
+            
+            # if self.tp_degree >= 1:
                 
-                self.gate_proj = SVDColumnParallelLinear(
-                    self.hidden_size,
-                    self.low_rank,
-                    self.intermediate_size,
-                    bias=mlp_bias,
-                    gather_output=False,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=False,
-                    sequence_dimension=None,
-                    tensor_model_parallel_group=get_tp_group(config),
-                )
+            #     self.gate_proj = SVDColumnParallelLinear(
+            #         self.hidden_size,
+            #         self.low_rank,
+            #         self.intermediate_size,
+            #         bias=mlp_bias,
+            #         gather_output=False,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=False,
+            #         sequence_dimension=None,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #     )
                 
-                self.up_proj = SVDColumnParallelLinear(
-                    self.hidden_size,
-                    self.low_rank,
-                    self.intermediate_size,
-                    bias=mlp_bias,
-                    gather_output=False,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=False,
-                    sequence_dimension=None,
-                    tensor_model_parallel_group=get_tp_group(config),
-                )
+            #     self.up_proj = SVDColumnParallelLinear(
+            #         self.hidden_size,
+            #         self.low_rank,
+            #         self.intermediate_size,
+            #         bias=mlp_bias,
+            #         gather_output=False,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=False,
+            #         sequence_dimension=None,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #     )
                 
-                self.down_proj = SVDRowParallelLinear(
-                    self.intermediate_size,
-                    self.low_rank,
-                    self.hidden_size,
-                    bias=mlp_bias,
-                    input_is_parallel=True,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=self.sequence_parallel_enabled,
-                    sequence_dimension=self.sequence_dimension,
-                    tensor_model_parallel_group=get_tp_group(config),
-                    reduce_dtype=config.neuron_config.rpl_reduce_dtype,
-                )
+            #     self.down_proj = SVDRowParallelLinear(
+            #         self.intermediate_size,
+            #         self.low_rank,
+            #         self.hidden_size,
+            #         bias=mlp_bias,
+            #         input_is_parallel=True,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=self.sequence_parallel_enabled,
+            #         sequence_dimension=self.sequence_dimension,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #         reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+            #     )
                     
             
-            else:
-                ############################################ SVD-Flash
-                self.gate_v_proj = ColumnParallelLinear(
-                    self.hidden_size,
-                    self.low_rank,
-                    bias=mlp_bias,
-                    gather_output=False,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=False,
-                    sequence_dimension=None,
-                    tensor_model_parallel_group=get_tp_group(config),
-                )
+            # else:
+            #     ############################################ SVD-Flash
+            #     self.gate_v_proj = ColumnParallelLinear(
+            #         self.hidden_size,
+            #         self.low_rank,
+            #         bias=mlp_bias,
+            #         gather_output=False,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=False,
+            #         sequence_dimension=None,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #     )
                 
-                self.gate_u_proj = ColumnParallelLinear(
-                    self.low_rank,
-                    self.intermediate_size,
-                    bias=mlp_bias,
-                    gather_output=False,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=False,
-                    sequence_dimension=None,
-                    tensor_model_parallel_group=get_tp_group(config),
-                )
+            #     self.gate_u_proj = ColumnParallelLinear(
+            #         self.low_rank,
+            #         self.intermediate_size,
+            #         bias=mlp_bias,
+            #         gather_output=False,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=False,
+            #         sequence_dimension=None,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #     )
                 
-                self.up_v_proj = ColumnParallelLinear(
-                    self.hidden_size,
-                    self.low_rank,
-                    bias=mlp_bias,
-                    gather_output=False,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=False,
-                    sequence_dimension=None,
-                    tensor_model_parallel_group=get_tp_group(config),
-                )
+            #     self.up_v_proj = ColumnParallelLinear(
+            #         self.hidden_size,
+            #         self.low_rank,
+            #         bias=mlp_bias,
+            #         gather_output=False,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=False,
+            #         sequence_dimension=None,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #     )
 
-                self.up_u_proj = ColumnParallelLinear(
-                    self.low_rank,
-                    self.intermediate_size,
-                    bias=mlp_bias,
-                    gather_output=False,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=False,
-                    sequence_dimension=None,
-                    tensor_model_parallel_group=get_tp_group(config),
-                )
+            #     self.up_u_proj = ColumnParallelLinear(
+            #         self.low_rank,
+            #         self.intermediate_size,
+            #         bias=mlp_bias,
+            #         gather_output=False,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=False,
+            #         sequence_dimension=None,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #     )
 
-                self.down_v_proj = RowParallelLinear(
-                    self.intermediate_size,
-                    self.low_rank,
-                    bias=mlp_bias,
-                    input_is_parallel=True,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=self.sequence_parallel_enabled,
-                    sequence_dimension=self.sequence_dimension,
-                    tensor_model_parallel_group=get_tp_group(config),
-                    reduce_dtype=config.neuron_config.rpl_reduce_dtype,
-                )
+            #     self.down_v_proj = RowParallelLinear(
+            #         self.intermediate_size,
+            #         self.low_rank,
+            #         bias=mlp_bias,
+            #         input_is_parallel=True,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=self.sequence_parallel_enabled,
+            #         sequence_dimension=self.sequence_dimension,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #         reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+            #     )
 
-                self.down_u_proj = RowParallelLinear(
-                    self.low_rank,
-                    self.hidden_size,
-                    bias=mlp_bias,
-                    input_is_parallel=True,
-                    dtype=config.neuron_config.torch_dtype,
-                    pad=True,
-                    sequence_parallel_enabled=self.sequence_parallel_enabled,
-                    sequence_dimension=self.sequence_dimension,
-                    tensor_model_parallel_group=get_tp_group(config),
-                    reduce_dtype=config.neuron_config.rpl_reduce_dtype,
-                )
-                ############################################
+            #     self.down_u_proj = RowParallelLinear(
+            #         self.low_rank,
+            #         self.hidden_size,
+            #         bias=mlp_bias,
+            #         input_is_parallel=True,
+            #         dtype=config.neuron_config.torch_dtype,
+            #         pad=True,
+            #         sequence_parallel_enabled=self.sequence_parallel_enabled,
+            #         sequence_dimension=self.sequence_dimension,
+            #         tensor_model_parallel_group=get_tp_group(config),
+            #         reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+            #     )
+            #     ############################################
                 
-            if self.mlp_kernel_enabled:
-                if self.neuron_config.quantized_mlp_kernel_enabled:
-                    setattr(
-                        self.gate_proj,
-                        "post_create_quantized_module_hook",
-                        preprocess_quantized_linear_layer,
-                    )
-                    setattr(
-                        self.up_proj,
-                        "post_create_quantized_module_hook",
-                        preprocess_quantized_linear_layer,
-                    )
-                    setattr(
-                        self.down_proj,
-                        "post_create_quantized_module_hook",
-                        preprocess_quantized_linear_layer,
-                    )
-                else:
-                    # Transpose the weights to the layout expected by kernels
-                    self.gate_proj.weight = transpose_parallel_linear_layer(self.gate_proj.weight)
-                    self.up_proj.weight = transpose_parallel_linear_layer(self.up_proj.weight)
-                    self.down_proj.weight = transpose_parallel_linear_layer(self.down_proj.weight)
+            # if self.mlp_kernel_enabled:
+            #     if self.neuron_config.quantized_mlp_kernel_enabled:
+            #         setattr(
+            #             self.gate_proj,
+            #             "post_create_quantized_module_hook",
+            #             preprocess_quantized_linear_layer,
+            #         )
+            #         setattr(
+            #             self.up_proj,
+            #             "post_create_quantized_module_hook",
+            #             preprocess_quantized_linear_layer,
+            #         )
+            #         setattr(
+            #             self.down_proj,
+            #             "post_create_quantized_module_hook",
+            #             preprocess_quantized_linear_layer,
+            #         )
+            #     else:
+            #         # Transpose the weights to the layout expected by kernels
+            #         self.gate_proj.weight = transpose_parallel_linear_layer(self.gate_proj.weight)
+            #         self.up_proj.weight = transpose_parallel_linear_layer(self.up_proj.weight)
+            #         self.down_proj.weight = transpose_parallel_linear_layer(self.down_proj.weight)
 
         else:
             self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=mlp_bias)
@@ -2702,90 +2747,36 @@ class NeuronLlamaMLP_SVD(nn.Module):
         print("-"*30 + " neuron_mm mlp " + "-"*30)
 
 
-        # up = self.up_u_proj(self.up_v_proj(x))
-        # gate = self.gate_u_proj(self.gate_v_proj(x))
-        # return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
-        
-        if self.tp_degree > 1:
-            # logger.info("-"*30 + " ENABLE_TP " + "-"*30)
-            # print("-"*30 + " ENABLE_TP " + "-"*30)
-            
-            # up = self.up_proj(x)
-            # gate = self.gate_proj(x)
-            # return self.down_proj(self.act_fn(gate) * up)
-        
-        ######################################################
-            print("-"*30 + " ENABLE_TP " + "-"*30)
 
-            S = x.shape[0]  # Get sequence length
-            
-            
-            # Use custom parameters if provided, otherwise use auto-selected parameters
-            
-            up_T_params = get_fused_mlp_up_T_params(S)
-            XTUV_params = get_fused_three_mm_XTUV_params(S)
-            
-            # Calculate 'gate' projection. SiLU is applied inside the kernel.
-            # Input: x (S, H). Output: activated_gate_t (I, S)
-            b, s, h = x.shape
-            x = x.view(-1, h)
-            # print("b, s, h: ", b, s, h)
-    
-            activated_gate_t = fused_mlp_up_T(
-                x,  self.gate_proj.weight_u.t(), self.gate_proj.weight_v.t(), self.up_proj.weight_u.t(), self.up_proj.weight_v.t(), **up_T_params
-            )
-            
-            # print("activated_gate_t.shape: ", activated_gate_t.shape)
-            output = self.down_proj(activated_gate_t)
-            output = output.reshape(b, s, h)
-            
-            
-            
-            # # --- Down Projection ---
-            
-            # output = fused_three_mm_XTUV(
-            #     activated_gate_t, self.down_proj.weight_u.t(), self.down_proj.weight_v.t(), **XTUV_params
-            # )
-            # output = output.reshape(b, s, h)
-            
+        S = x.shape[0]  # Get sequence length        
+        
+        up_T_params = get_fused_mlp_up_T_params(S)
+        
+        # Calculate 'gate' projection. SiLU is applied inside the kernel.
+        # Input: x (S, H). Output: activated_gate_t (I, S)
+        b, s, h = x.shape
+        x = x.view(-1, h)
+        
 
-            return output
-    
+        activated_gate_t = fused_mlp_up_T(
+            x,  self.gate_proj.weight_u.t(), self.gate_proj.weight_v.t(), self.up_proj.weight_u.t(), self.up_proj.weight_v.t(), **up_T_params
+        )
+        
+        output = self.down_proj(activated_gate_t)
+        output = output.reshape(b, s, h)
         
         
-        else:
-            logger.info("-"*30 + " No ENABLE_TP " + "-"*30)
-            b, s, h = x.shape
-            if s != 1:
-                x = x.view(-1, h)
-                # return nki_mm(x, self.up_v_proj.weight, self.up_u_proj.weight, 
-                #      self.gate_v_proj.weight, self.gate_u_proj.weight,
-                #      self.down_v_proj.weight, self.down_u_proj.weight)
+        
+        # # --- Down Projection ---
+        
+        # output = fused_three_mm_XTUV(
+        #     activated_gate_t, self.down_proj.weight_u.t(), self.down_proj.weight_v.t(), **XTUV_params
+        # )
+        # output = output.reshape(b, s, h)
             
 
-                result = svd_mlp_with_fused_kernel(
-                    x, self.up_v_proj.weight.t(), self.up_u_proj.weight.t(), 
-                    self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t(),  
-                    self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
-                return result
-            
-            else:
-                # print("x.shape: ", x.shape) #torch.Size([1, 1, 2048])
-                # print("self.up_v_proj.weight.shape: ", self.up_v_proj.weight.shape) #torch.Size([1280, 2048])
-                # print("self.up_u_proj.shape: ", self.up_u_proj.weight.shape) #torch.Size([8192, 1280])
-                # print("self.gate_v_proj.shape: ", self.gate_v_proj.weight.shape) #torch.Size([1280, 2048])
-                # print("self.gate_u_proj.shape: ", self.gate_u_proj.weight.shape) #torch.Size([8192, 1280])
-                # print("self.down_v_proj.shape: ", self.down_v_proj.weight.shape) #torch.Size([1280, 8192])
-                # print("self.down_u_proj.shape: ", self.down_u_proj.weight.shape) #torch.Size([2048, 1280])
-                
-                gate_proj_output = torch.einsum('...m,mn,nk->...k', x,self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t())
-                up_proj_output = torch.einsum('...m,mn,nk->...k', x,self.up_v_proj.weight.t(), self.up_u_proj.weight.t())
-                down_proj_input = self.act_fn(gate_proj_output) * up_proj_output
-                output = torch.einsum('...m,mn,nk->...k', down_proj_input, self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
+        return output
 
-
-
-            return output
     
     def _svd_baseline(self, x):
         logger.info("-"*30 + " svd baseline mlp " + "-"*30)
@@ -2800,12 +2791,6 @@ class NeuronLlamaMLP_SVD(nn.Module):
         output = nki_matmul_fully_optimized_(output_v.t() , self.down_u_proj.weight.t())
         return output
 
-    
-    # def _svd_flash_mlp(self, x):
-
-    #     logger.info("-"*30 + " svd-flash mlp " + "-"*30)
-    #     b, s, h = x.shape
-    #     return XUV_matmul(x.view(-1, h), self.up_v_proj.weight, self.up_u_proj.weight)  # TODO: Fix tiles padding
 
 
     def forward(self, x, rmsnorm=None, residual=None, adapter_ids=None):
@@ -4129,7 +4114,7 @@ class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
         if neuron_config.fused_qkv:
             state_dict = convert_state_dict_to_fused_qkv(state_dict, config)
             
-        if config.neuron_config.tp_degree > 1 and config.metadata["svd_llama"] is True:
+        if config.metadata is not None and config.metadata["svd_llama"] is True:
             state_dict = add_state_dict_for_mlp(state_dict, config)
 
         if neuron_config.vocab_parallel:
