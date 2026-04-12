@@ -16,8 +16,8 @@ from neuronx_distributed.parallel_layers.mappings import (
     _gather_along_dim,
     _reduce_scatter_along_dim,
     gather_from_sequence_parallel_region,
-    _traced_spmd_tiled_rs,
-    _traced_tiled_rs,
+    # _traced_spmd_tiled_rs,
+    # _traced_tiled_rs,
 )
 from neuronx_distributed.parallel_layers.parallel_state import get_tensor_model_parallel_group
 from neuronxcc.nki.compiler.backends.neuron.dimensions import CCPipeline   # noqa: N813

@@ -1,6 +1,7 @@
 import copy
 import os
 from types import SimpleNamespace
+from transformers.generation import GenerationMixin
 from typing import Any, Dict, Optional, Union
 import torch
 from neuronx_distributed.utils.medusa_utils import (
@@ -96,7 +97,7 @@ def to_pretrained_config(config: InferenceConfig):
     return PretrainedConfig(**config_dict)
 
 
-class HuggingFaceGenerationAdapter(PreTrainedModel):
+class HuggingFaceGenerationAdapter(PreTrainedModel, GenerationMixin):
     def __init__(self, model: NeuronApplicationBase, input_start_offsets=None):
         hf_config = to_pretrained_config(model.config)
         super().__init__(hf_config)

@@ -90,7 +90,9 @@ def parse_args():
 
 def setup_run_parser(run_parser: argparse.ArgumentParser):
     run_parser.add_argument("--model-path", type=str, required=True)
-    run_parser.add_argument("--compiled-model-path", type=str, required=True)
+    run_parser.add_argument("--svd-model-path", type=str, default="/home/ubuntu/models/llama-3.2-1b_0.8_svd/")
+    # run_parser.add_argument("--compiled-model-path", type=str, required=True)
+    run_parser.add_argument("--compiled-model-path", type=str, default="/home/ubuntu/traced_model/llama-3.2-1b/")
 
     # SVD-Flash
     run_parser.add_argument("--compress-ratio", type=float, default=0.8)
@@ -360,6 +362,7 @@ def setup_run_parser(run_parser: argparse.ArgumentParser):
     )
 
 
+
 def validate_file_exists(path):
     if not os.path.exists(path) or not os.path.isfile(path):
         raise argparse.ArgumentError("Path must exist and be a file")
@@ -565,8 +568,13 @@ def clear_neuron_cache(cache_dir="/var/tmp/neuron-compile-cache"):
 def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
 
     clear_neuron_cache()
+    # if svd is True:
+    #     args.model_path = args.model_path + "/svd_llama"
+        
     if svd is True:
-        args.model_path = args.model_path + "/svd_llama"
+        args.model_path = args.svd_model_path
+    else:
+        args.model_path = args.model_path
     
     ############################################ Configure generation config
     
@@ -630,7 +638,7 @@ def run_inference(model_cls: Type[NeuronApplicationBase], args, svd=False):
     print("max_context_length: ", args.max_context_length)
     print("seq_len: ", args.seq_len)
     report = benchmark_sampling(model, None, generation_config, benchmark_report_path=None)
-    with open("/home/ubuntu/SVD-Flash/llama_output.log", "a") as f:
+    with open("./llama_output.log", "a") as f:
         print('-' * 90, file=f)
         print("model: ", args.model_path, file=f)
         print("max_context_length: ", args.max_context_length, file=f)
@@ -732,13 +740,13 @@ if __name__ == "__main__":
 
     args = parse_args()
     report_wo_svd = run_inference(NeuronLlamaForCausalLM, args, svd=False)
-    svd_flash(args)
+    # svd_flash(args)
     report_svd = run_inference(NeuronLlamaForCausalLM, args, svd=True)
 
     print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"])
     print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"])
     print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"])
-    with open("/home/ubuntu/SVD-Flash/llama_output.log", "a") as f:
+    with open("./llama_output.log", "a") as f:
         print("e2e_model time wo svd: ", report_wo_svd["e2e_model"]["latency_ms_avg"], file=f)
         print("e2e_model time with svd: ", report_svd["e2e_model"]["latency_ms_avg"], file=f)
         print("E2E Speedup: ", report_wo_svd["e2e_model"]["latency_ms_avg"] / report_svd["e2e_model"]["latency_ms_avg"], file=f)

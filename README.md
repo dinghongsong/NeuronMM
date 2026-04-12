@@ -1,4 +1,4 @@
-## SVD-Flash
+## NeuronMM
 
 ![SVD-Flash: Efficient LLM inference via SVD Compression and Tiling on AWS Trainium](./images/neuronmm.png)
 
@@ -6,47 +6,46 @@
 
 1. Launch a Tranium instance using [AWS EC2](https://us-west-2.console.aws.amazon.com/ec2/home?region=us-west-2#LaunchInstances:) with the following settings:  
    i. **Name and tags**: SVD-Flash  
-   ii. **Amazon Machine Image**: Deep Learning AMI Neuron (Ubuntu 22.04)  
+   ii. **Amazon Machine Image**: Deep Learning AMI Neuron (Ubuntu 24.04)  
    iii. **Instance type**: trn1.2xlarge  
    iv. **Key pair (login)**: create a new key pair  
    v. **Metadata version [under “Advanced details”]**: V2 only (otherwise, you will encounter a not authorized error)  
    vi. When connecting to these instances via SSH, use the username of *ubuntu*.
 
-2. Activate the Neuron virtual environment to run inference by running  
-   ```bash
-   source /opt/aws_neuronx_venv_pytorch_2_7_nxd_inference/bin/activate
+
+
+2. Activate the Neuron virtual environment
+    ```
+    echo 'source /opt/aws_neuronx_venv_pytorch_2_9_nxd_inference/bin/activate' | sudo tee -a ~/.bashrc
+
+    source ~/.bashrc
+    ```
 
 3. Download `Llama-3.2-1B` from Hugging face
     ``` 
     mkdir models
 
-    huggingface-cli download --token  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 meta-llama/Llama-3.2-1B --local-dir ./models/llama-3.2-1b
+    huggingface-cli download --token  <your_hf_token> meta-llama/Llama-3.2-1B --local-dir ./models/llama-3.2-1b
+    ``` 
 
-    cd /home/ubuntu/models/llama-3.2-1b
-
-    mv model.safetensors  model_ori.safetensors
-
-4. Download the weights after SVD and post-training processing
+4. Download the weights after SVD and post-training processing.
    ```
-   wget "https://huggingface.co/SVD-Flash/llama-3.2-1b_0.8_svd/resolve/main/llama-3.2-1b_svd_0.8_weights.safetensors?download=true" \
-     -O model.safetensors   
-
-5. Download the v0.0.1 repo
+    huggingface-cli download Macro2017/llama-3.2-1b_0.8_svd --local-dir ./models/llama-3.2-1b_0.8_svd
    ```
-   cd ~   
-   git clone -b v0.0.1 --single-branch https://github.com/dinghongsong/SVD-Flash.git
 
 
-5. Testing Example (Without Tensor Parallelism): Llama inference with logit matching accuracy check using custom error tolerances
+5. Testing Example of Llama inference.
    ```
    python llama_inference.py \
     --model-type llama \
     --task-type causal-lm \
     run \
     --model-path /home/ubuntu/models/llama-3.2-1b \
+    --svd-model-path /home/ubuntu/models/llama-3.2-1b_0.8_svd \
     --compiled-model-path /home/ubuntu/traced_model/llama-3.2-1b \
     --torch-dtype bfloat16 \
     --batch-size 1 \
+    --tp-degree 2 \
     --max-context-length 32 \
     --seq-len 64 \
     --check-accuracy-mode logit-matching \
@@ -123,8 +122,30 @@ model:  /home/ubuntu/models/llama-3.2-1b/svd_llama
         "throughput": 39.55578356560814
     }
 }
-e2e_model time wo svd:  1300.0563144683838
-e2e_model time with svd:  893.8456416130066
+e2e_model time (baseline):  1300.0563144683838
+e2e_model time (neuronmm):  893.8456416130066
 E2E Speedup:  1.4544528204247231
+
+```
+## Acknowledgements
+Our code is based on [SVD-LLM](https://github.com/AIoT-MLSys-Lab/SVD-LLM) and [NXDI](https://github.com/aws-neuron/neuronx-distributed-inference).
+
+We thank the teams for their open-source implementation.
+
+
+## Citation
+
+If you find AttnCache useful or relevant to your project and research, please kindly cite our paper:
+
+
+```
+@article{song2025neuronmm,
+  title={NeuronMM: High-Performance Matrix Multiplication for LLM Inference on AWS Trainium},
+  author={Song, Dinghong and Xu, Jierui and Yang, Weichu and Su, Pengfei and Li, Dong},
+  journal={arXiv preprint arXiv:2510.25977},
+  year={2025}
+}
+```
+
 
 

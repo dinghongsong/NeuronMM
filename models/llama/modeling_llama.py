@@ -22,6 +22,41 @@ import copy
 import gc
 import logging
 import math
+from neuronx_distributed.parallel_layers import utils 
+from neuronx_distributed.parallel_layers.layers import LinearWithAsyncCommunication, BaseParallelLinear, _initialize_parameter_cpu
+from neuronx_distributed.parallel_layers.utils import (
+    EmbeddingUtility,
+    cast_if_autocast_enabled,
+    divide,
+    get_padding_length,
+    is_torch_version_greater_than_2,
+    set_tensor_model_parallel_attributes,
+    verify_casted_dtype,
+)
+from typing import (
+    Optional, Tuple, Union, Any, Callable, Dict, Type, cast
+    
+)
+
+from torch.nn.parameter import Parameter
+
+import copy
+from torch.distributed import ProcessGroup
+import gc
+import logging
+import math
+import numpy as np
+from typing import List, Optional, Tuple, Type
+
+
+import neuronxcc.nki as nki
+import neuronxcc.nki.isa as nisa
+import neuronxcc.nki.language as nl
+import neuronxcc.nki.typing as nt
+from neuronxcc.nki.language import par_dim
+
+
+import torch
 from typing import List, Optional, Tuple, Type
 import neuronxcc.nki as nki
 import neuronxcc.nki.isa as nisa
@@ -30,7 +65,76 @@ import neuronxcc.nki.typing as nt
 import numpy as np
 from neuronxcc.nki.language import par_dim
 
+
 import torch
+from neuronx_distributed.parallel_layers import parallel_state  # noqa: E402
+from neuronx_distributed.parallel_layers.layers import (  # noqa: E402; noqa: E402; noqa: E402; noqa: E402; noqa: E402
+    ColumnParallelLinear,
+    ParallelEmbedding,
+    RowParallelLinear,
+)
+from neuronx_distributed.parallel_layers.parallel_state import (
+    get_tensor_model_parallel_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_size,
+    get_aot_mode
+)
+from neuronx_distributed.parallel_layers.mappings import (
+    _gather_along_first_dim,
+    gather_from_sequence_parallel_region,
+    reduce_from_tensor_model_parallel_region,
+    reduce_scatter_to_sequence_parallel_region,
+    # reduce_scatter_to_sequence_parallel_region_tiled,
+    _gather_along_dim,
+    _reduce_scatter_along_dim,
+    copy_to_tensor_model_parallel_region,
+    gather_from_tensor_model_parallel_region,
+    gather_from_tensor_model_parallel_region_with_dim,
+    reduce_from_tensor_model_parallel_region,
+    reduce_scatter_to_sequence_parallel_region,
+    scatter_input_channels_to_tensor_model_parallel_region,
+    scatter_to_tensor_model_parallel_region,
+)
+from neuronx_distributed.parallel_layers.utils import get_padding_length
+from neuronx_distributed.utils import cpu_mode
+from neuronxcc.nki._private_kernels.mlp import (
+    mlp_fused_add_isa_kernel,
+    mlp_isa_kernel,
+    quant_mlp_fused_add_isa_kernel,
+    quant_mlp_isa_kernel,
+)
+from neuronxcc.nki._private_kernels.rmsnorm import rmsnorm_quant_isa_kernel
+# from neuronxcc.nki.compiler.backends.neuron.dimensions import CCPipeline  # noqa: N813
+from neuronxcc.nki.language import nc
+from torch import nn
+from torch_neuronx.xla_impl.ops import nki_jit
+from transformers import LlamaForCausalLM
+from transformers.activations import ACT2FN
+from transformers.models.llama.modeling_llama import LlamaRMSNorm, LlamaRotaryEmbedding
+
+from neuronx_distributed_inference.models.config import InferenceConfig, NeuronConfig  # noqa: E402
+from neuronx_distributed_inference.models.model_base import (  # noqa: E402
+    NeuronBaseForCausalLM,
+    NeuronBaseModel,
+)
+from neuronx_distributed_inference.modules.attention.attention_base import NeuronAttentionBase
+from neuronx_distributed_inference.modules.attention.gqa import (  # noqa: E402
+    BaseGroupQueryAttention,
+)
+from neuronx_distributed_inference.modules.attention.utils import (
+    RotaryEmbedding,
+    preprocess_quantized_linear_layer,
+    transpose_parallel_linear_layer,
+)
+
+
+from neuronx_distributed_inference.modules.custom_calls import CustomRMSNorm
+# from neuronx_distributed_inference.modules.eagle.utils import tiled_all_gather_matmul
+from neuronx_distributed_inference.modules.flashdecode.utils import calculate_num_cores_per_group
+from neuronx_distributed_inference.modules.lora_serving.lora_module import is_lora_module
+from neuronx_distributed_inference.utils.distributed import get_tp_group
+
+
 from neuronx_distributed.parallel_layers import parallel_state  # noqa: E402
 from neuronx_distributed.parallel_layers.layers import (  # noqa: E402; noqa: E402; noqa: E402; noqa: E402; noqa: E402
     ColumnParallelLinear,
@@ -42,7 +146,7 @@ from neuronx_distributed.parallel_layers.mappings import (
     gather_from_sequence_parallel_region,
     reduce_from_tensor_model_parallel_region,
     reduce_scatter_to_sequence_parallel_region,
-    reduce_scatter_to_sequence_parallel_region_tiled,
+    # reduce_scatter_to_sequence_parallel_region_tiled,
 )
 from neuronx_distributed.parallel_layers.utils import get_padding_length
 from neuronx_distributed.utils import cpu_mode
@@ -1176,6 +1280,1153 @@ class SVD_LlamaMLP(nn.Module):
         return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
     
 
+# ########### original MLP_SVD
+# class NeuronLlamaMLP_SVD(nn.Module):
+#     """
+#     This class just replace the linear layers (gate_proj, up_proj and down_proj) with column and row parallel layers
+#     """
+
+#     def __init__(self, config: InferenceConfig):
+#         super().__init__()
+#         self.config = config
+#         self.neuron_config = config.neuron_config
+#         self.tp_degree = config.neuron_config.tp_degree
+#         self.hidden_size = config.hidden_size
+#         self.intermediate_size = config.intermediate_size
+#         self.act_fn = ACT2FN[config.hidden_act]
+
+#         self.sequence_parallel_enabled = getattr(
+#             self.neuron_config, "sequence_parallel_enabled", False
+#         )
+#         self.sequence_dimension = 1 if self.sequence_parallel_enabled else None
+#         self.rms_norm_eps = config.rms_norm_eps
+#         self.mlp_kernel_enabled = self.neuron_config.mlp_kernel_enabled
+#         self.fused_rmsnorm_skip_gamma = self.config.neuron_config.fused_rmsnorm_skip_gamma
+#         self.quantized_mlp_kernel_enabled = self.neuron_config.quantized_mlp_kernel_enabled
+#         self.rmsnorm_quantize_kernel_enabled = self.neuron_config.rmsnorm_quantize_kernel_enabled
+#         self.quantize_clamp_bound = self.neuron_config.quantize_clamp_bound
+#         self.logical_nc_config = self.neuron_config.logical_nc_config
+#         self.activation_quantization_type = self.neuron_config.activation_quantization_type
+#         mlp_bias = getattr(config, "mlp_bias", False)
+
+#         ############################################ SVD-Flash
+#         # self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
+#         # self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+#         self.low_rank = round(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+
+#         ############################################
+#         if self.neuron_config.quantized_mlp_kernel_enabled and self.quantize_clamp_bound == float(
+#             "inf"
+#         ):
+#             logging.warning(
+#                 "quantize_clamp_bound is not specified in NeuronConfig. We will use the default value of 1200 for llama models in quantized kernels."
+#             )
+#             self.quantize_clamp_bound = 1200.0
+#         if parallel_state.model_parallel_is_initialized():
+#             if self.neuron_config.quantized_mlp_kernel_enabled:
+#                 # # Quantized MLP kernels expect intermediate size to be multiple of 128, so we need to pad
+#                 tp_degree = self.neuron_config.tp_degree
+#                 self.intermediate_size += (
+#                     get_padding_length(self.intermediate_size // tp_degree, 128) * tp_degree
+#                 )
+#                 logger.debug(f"Quantized intermediate_size: {self.intermediate_size}")
+            
+#             ############################################ original
+#             # self.gate_proj = ColumnParallelLinear(
+#             #     self.hidden_size,
+#             #     self.intermediate_size,
+#             #     bias=mlp_bias,
+#             #     gather_output=False,
+#             #     dtype=config.neuron_config.torch_dtype,
+#             #     pad=True,
+#             #     sequence_parallel_enabled=False,
+#             #     sequence_dimension=None,
+#             #     tensor_model_parallel_group=get_tp_group(config),
+#             # )
+#             # self.up_proj = ColumnParallelLinear(
+#             #     self.hidden_size,
+#             #     self.intermediate_size,
+#             #     bias=mlp_bias,
+#             #     gather_output=False,
+#             #     dtype=config.neuron_config.torch_dtype,
+#             #     pad=True,
+#             #     sequence_parallel_enabled=False,
+#             #     sequence_dimension=None,
+#             #     tensor_model_parallel_group=get_tp_group(config),
+#             # )
+#             # self.down_proj = RowParallelLinear(
+#             #     self.intermediate_size,
+#             #     self.hidden_size,
+#             #     bias=mlp_bias,
+#             #     input_is_parallel=True,
+#             #     dtype=config.neuron_config.torch_dtype,
+#             #     pad=True,
+#             #     sequence_parallel_enabled=self.sequence_parallel_enabled,
+#             #     sequence_dimension=self.sequence_dimension,
+#             #     tensor_model_parallel_group=get_tp_group(config),
+#             #     reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+#             # )
+#             ############################################
+
+#             ############################################ SVD-Flash
+#             self.gate_v_proj = ColumnParallelLinear(
+#                 self.hidden_size,
+#                 self.low_rank,
+#                 bias=mlp_bias,
+#                 gather_output=False,
+#                 dtype=config.neuron_config.torch_dtype,
+#                 pad=True,
+#                 sequence_parallel_enabled=False,
+#                 sequence_dimension=None,
+#                 tensor_model_parallel_group=get_tp_group(config),
+#             )
+            
+#             self.gate_u_proj = ColumnParallelLinear(
+#                 self.low_rank,
+#                 self.intermediate_size,
+#                 bias=mlp_bias,
+#                 gather_output=False,
+#                 dtype=config.neuron_config.torch_dtype,
+#                 pad=True,
+#                 sequence_parallel_enabled=False,
+#                 sequence_dimension=None,
+#                 tensor_model_parallel_group=get_tp_group(config),
+#             )
+            
+#             self.up_v_proj = ColumnParallelLinear(
+#                 self.hidden_size,
+#                 self.low_rank,
+#                 bias=mlp_bias,
+#                 gather_output=False,
+#                 dtype=config.neuron_config.torch_dtype,
+#                 pad=True,
+#                 sequence_parallel_enabled=False,
+#                 sequence_dimension=None,
+#                 tensor_model_parallel_group=get_tp_group(config),
+#             )
+
+#             self.up_u_proj = ColumnParallelLinear(
+#                 self.low_rank,
+#                 self.intermediate_size,
+#                 bias=mlp_bias,
+#                 gather_output=False,
+#                 dtype=config.neuron_config.torch_dtype,
+#                 pad=True,
+#                 sequence_parallel_enabled=False,
+#                 sequence_dimension=None,
+#                 tensor_model_parallel_group=get_tp_group(config),
+#             )
+
+#             self.down_v_proj = RowParallelLinear(
+#                 self.intermediate_size,
+#                 self.low_rank,
+#                 bias=mlp_bias,
+#                 input_is_parallel=True,
+#                 dtype=config.neuron_config.torch_dtype,
+#                 pad=True,
+#                 sequence_parallel_enabled=self.sequence_parallel_enabled,
+#                 sequence_dimension=self.sequence_dimension,
+#                 tensor_model_parallel_group=get_tp_group(config),
+#                 reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+#             )
+
+#             self.down_u_proj = RowParallelLinear(
+#                 self.low_rank,
+#                 self.hidden_size,
+#                 bias=mlp_bias,
+#                 input_is_parallel=True,
+#                 dtype=config.neuron_config.torch_dtype,
+#                 pad=True,
+#                 sequence_parallel_enabled=self.sequence_parallel_enabled,
+#                 sequence_dimension=self.sequence_dimension,
+#                 tensor_model_parallel_group=get_tp_group(config),
+#                 reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+#             )
+#             ############################################
+            
+#             if self.mlp_kernel_enabled:
+#                 if self.neuron_config.quantized_mlp_kernel_enabled:
+#                     setattr(
+#                         self.gate_proj,
+#                         "post_create_quantized_module_hook",
+#                         preprocess_quantized_linear_layer,
+#                     )
+#                     setattr(
+#                         self.up_proj,
+#                         "post_create_quantized_module_hook",
+#                         preprocess_quantized_linear_layer,
+#                     )
+#                     setattr(
+#                         self.down_proj,
+#                         "post_create_quantized_module_hook",
+#                         preprocess_quantized_linear_layer,
+#                     )
+#                 else:
+#                     # Transpose the weights to the layout expected by kernels
+#                     self.gate_proj.weight = transpose_parallel_linear_layer(self.gate_proj.weight)
+#                     self.up_proj.weight = transpose_parallel_linear_layer(self.up_proj.weight)
+#                     self.down_proj.weight = transpose_parallel_linear_layer(self.down_proj.weight)
+
+#         else:
+#             self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=mlp_bias)
+#             self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=mlp_bias)
+#             self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=mlp_bias)
+
+#     def _kernel_enabled_quantized_mlp(self, x, rmsnorm, residual, adapter_ids):
+#         full_seqlen = x.shape[1] * (self.config.neuron_config.tp_degree if self.sequence_parallel_enabled else 1)
+#         if full_seqlen <= self.neuron_config.seq_len_threshold_for_cc_tiling:  # Keep regular grid for TKG.
+#             grid = (nc(self.logical_nc_config),)
+#         else:  # Add CC pipelining dim for CTE kernel grid
+#             grid = (CCPipeline(self.neuron_config.cc_pipeline_tiling_factor) * nc(self.logical_nc_config),)
+#         fused_residual = residual is not None
+#         fused_rmsnorm = rmsnorm is not None
+#         logger.debug(
+#             f"MLP: quantized kernel, fused_residual={fused_residual}, fused_rmsnorm={fused_rmsnorm}, logical_nc_config={self.logical_nc_config}"
+#         )
+
+#         # Can't do residual add in the kernel if SP is enabled
+#         if fused_residual:
+#             assert (
+#                 not self.sequence_parallel_enabled
+#             ), "Quantized MLP cannot have both fused residual add and sequence parallel RMSnorm!"
+#             # Using fused residual add
+#             _mlp_fwd_call = nki_jit()(quant_mlp_fused_add_isa_kernel)
+#         else:
+#             _mlp_fwd_call = nki_jit()(quant_mlp_isa_kernel)
+
+#         if fused_rmsnorm:
+#             ln_w = rmsnorm.weight.unsqueeze(0)
+#         else:
+#             ln_w = torch.zeros(size=(1, self.hidden_size), dtype=x.dtype, device=x.device)
+
+#         # Handle SP RMSnorm
+#         x_orig_dtype = x.dtype
+#         if self.sequence_parallel_enabled:
+#             # This RMSNormQuant kernel will do quantization inside, so we pass the
+#             # clamp_bound for clipping.
+#             # If we don't use this kernel, the MLP kernel below will do the
+#             # quantization, so we also pass clamp_bound to that kernel.
+#             if self.rmsnorm_quantize_kernel_enabled:
+#                 logger.debug(
+#                     "Running Quantized MLP kernel with sequence-parallel RMSnorm-Quantize kernel!"
+#                 )
+#                 _rmsnorm_quant_fwd_call = nki_jit()(rmsnorm_quant_isa_kernel)
+#                 quant_rmsnorm_out = torch.zeros(
+#                     size=(
+#                         x.shape[0],  # batch size
+#                         x.shape[1],  # sequence length
+#                         x.shape[2] + 4,  # hidden size + 4 bytes for packing fp32 scale
+#                     ),
+#                     dtype=torch.int8,
+#                     device=x.device,
+#                 )
+#                 clamp_bound = self.quantize_clamp_bound
+#                 _rmsnorm_quant_fwd_call[grid](
+#                     x, ln_w, clamp_bound, quant_rmsnorm_out, kernel_name="QuantOnly"
+#                 )
+#                 x = gather_from_sequence_parallel_region(
+#                     quant_rmsnorm_out,
+#                     self.sequence_dimension,
+#                     process_group=get_tp_group(self.config),
+#                     tile_cc=self.neuron_config.tile_cc,
+#                 )
+
+#             else:
+#                 logger.debug(
+#                     "Running Quantized MLP kernel with external (native compiler) sequence-parallel RMSnorm!"
+#                 )
+#                 x = gather_from_sequence_parallel_region(
+#                     x, self.sequence_dimension, process_group=get_tp_group(self.config), tile_cc=self.neuron_config.tile_cc
+#                 )
+
+#         # Build output tensor
+#         output_tensor_seqlen = x.shape[1]
+#         output_tensor = torch.zeros(
+#             size=(
+#                 x.shape[0],  # batch size
+#                 output_tensor_seqlen,
+#                 self.hidden_size,  # hidden size
+#             ),
+#             dtype=x_orig_dtype,
+#             device=x.device,
+#         )
+
+#         # Grab weights
+#         # all weights of the layers are stored in (out, in) shape
+#         # unsqueeze so that shape of RMS gamma weight is [1, hidden] instead of [hidden]
+#         gate_w = self.gate_proj.weight.data
+#         gate_w_scale = self.gate_proj.scale
+#         up_w = self.up_proj.weight.data
+#         up_w_scale = self.up_proj.scale
+#         down_w = self.down_proj.weight.data
+#         down_w_scale = self.down_proj.scale
+#         clamp_bound = self.quantize_clamp_bound
+
+#         if fused_residual:
+#             residual_output_tensor = torch.zeros(
+#                 size=(
+#                     x.shape[0],  # batch size
+#                     output_tensor_seqlen,
+#                     self.hidden_size,  # hidden size
+#                 ),
+#                 dtype=x.dtype,
+#                 device=x.device,
+#             )
+
+#             _mlp_fwd_call[grid](
+#                 x,  # attn_output
+#                 residual,  # hidden
+#                 ln_w,  # ln_w
+#                 gate_w,  # gate_w
+#                 gate_w_scale,
+#                 up_w,  # up_w
+#                 up_w_scale,
+#                 down_w,  # down_w
+#                 down_w_scale,
+#                 clamp_bound,
+#                 output_tensor,  # out
+#                 add_out=residual_output_tensor,
+#                 fused_rmsnorm=fused_rmsnorm,
+#                 eps=self.rms_norm_eps,
+#                 kernel_name="MLP",
+#                 store_add=True,
+#             )
+#             residual = residual_output_tensor
+#         else:
+#             _mlp_fwd_call[grid](
+#                 x,  # hidden
+#                 # should be fine to pass gamma is as a dummy even if not using fused rmsnorm
+#                 ln_w,
+#                 gate_w,  # gate_w
+#                 gate_w_scale,
+#                 up_w,  # up_w
+#                 up_w_scale,
+#                 down_w,  # down_w
+#                 down_w_scale,
+#                 clamp_bound,
+#                 output_tensor,  # out
+#                 # Run RMSNorm inside the kernel if NOT using SP rmsnorm
+#                 fused_rmsnorm=fused_rmsnorm,
+#                 eps=self.rms_norm_eps,
+#                 kernel_name="MLP",
+#             )
+#             residual = None
+
+#         # All-reduce or reduce-scatter, depending on whether SP is enabled
+#         if self.sequence_parallel_enabled:
+#             if self.neuron_config.tile_cc:
+#                 output_tensor = reduce_scatter_to_sequence_parallel_region_tiled(
+#                     output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
+#                 )
+#             else:
+#                 output_tensor = reduce_scatter_to_sequence_parallel_region(
+#                     output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
+#                 )
+#         else:
+#             output_tensor = reduce_from_tensor_model_parallel_region(output_tensor)
+
+#         logger.debug(f"Quantized MLP output shape {output_tensor.shape}")
+#         return (output_tensor, residual)
+
+#     def _kernel_enabled_mlp(self, x, rmsnorm, residual, adapter_ids):
+#         fused_residual = residual is not None
+#         fused_rmsnorm = rmsnorm is not None
+#         logger.debug(
+#             f"MLP: kernel, fused_residual={fused_residual}, fused_rmsnorm={fused_rmsnorm}, skip_gamma={self.fused_rmsnorm_skip_gamma}, logical_nc_config={self.logical_nc_config}"
+#         )
+
+#         # Choose which kernel to call
+#         if fused_residual:
+#             assert (
+#                 not self.sequence_parallel_enabled
+#             ), "MLP kernel cannot have both fused residual add and sequence parallel RMSnorm!"
+#             # Using fused residual add
+#             _mlp_fwd_call = nki_jit()(mlp_fused_add_isa_kernel)
+#         else:
+#             _mlp_fwd_call = nki_jit()(mlp_isa_kernel)
+
+#         if self.sequence_parallel_enabled:
+#             x = gather_from_sequence_parallel_region(
+#                 x, self.sequence_dimension, process_group=get_tp_group(self.config), tile_cc=self.neuron_config.tile_cc
+#             )
+
+#         # Build output tensor
+#         output_tensor_seqlen = x.shape[1]
+#         output_tensor = torch.zeros(
+#             size=(
+#                 x.shape[0],  # batch size
+#                 output_tensor_seqlen,
+#                 self.hidden_size,  # hidden size
+#             ),
+#             dtype=x.dtype,
+#             device=x.device,
+#         )
+
+#         # Grab weights
+#         # all weights of the layers are stored in (out, in) shape
+#         # unsqueeze so that shape of RMS gamma weight is [1, hidden] instead of [hidden]
+#         if fused_rmsnorm:
+#             ln_w = rmsnorm.weight.unsqueeze(0)
+#         else:
+#             ln_w = torch.zeros(size=(1, self.hidden_size), dtype=x.dtype, device=x.device)
+#         gate_w = self.gate_proj.weight.data
+#         up_w = self.up_proj.weight.data
+#         down_w = self.down_proj.weight.data
+
+#         if output_tensor_seqlen <= self.neuron_config.seq_len_threshold_for_cc_tiling:  # Keep regular grid for TKG. Messes up the MLP impl
+#             grid = (nc(self.logical_nc_config),)
+#         else:  # Add CC pipelining dim for CTE kernel grid
+#             grid = (CCPipeline(self.neuron_config.cc_pipeline_tiling_factor) * nc(self.logical_nc_config),)
+
+#         if fused_residual:
+#             residual_output_tensor = torch.zeros(
+#                 size=(
+#                     x.shape[0],  # batch size
+#                     output_tensor_seqlen,
+#                     self.hidden_size,  # hidden size
+#                 ),
+#                 dtype=x.dtype,
+#                 device=x.device,
+#             )
+
+#             _mlp_fwd_call[grid](
+#                 x,  # attn_output
+#                 residual,  # hidden
+#                 ln_w,  # ln_w
+#                 gate_w,  # gate_w
+#                 up_w,  # up_w
+#                 down_w,  # down_w
+#                 output_tensor,  # out
+#                 kernel_name="MLP",
+#                 add_out=residual_output_tensor,
+#                 fused_rmsnorm=fused_rmsnorm,
+#                 skip_gamma=self.fused_rmsnorm_skip_gamma,
+#                 eps=self.rms_norm_eps,
+#                 store_add=True,
+#             )
+#             residual = residual_output_tensor
+#         else:
+#             _mlp_fwd_call[grid](
+#                 x,  # hidden
+#                 # should be fine to pass gamma is as a dummy even if not using fused rmsnorm
+#                 ln_w,
+#                 gate_w,
+#                 up_w,
+#                 down_w,
+#                 output_tensor,  # out
+#                 kernel_name="MLP",
+#                 # Run RMSNorm inside the kernel if NOT using SP rmsnorm
+#                 fused_rmsnorm=fused_rmsnorm,
+#                 skip_gamma=self.fused_rmsnorm_skip_gamma,
+#                 eps=self.rms_norm_eps,
+#             )
+#             residual = None
+
+#         # All-reduce or reduce-scatter, depending on whether SP is enabled
+#         if self.sequence_parallel_enabled:
+#             if self.neuron_config.tile_cc:
+#                 output_tensor = reduce_scatter_to_sequence_parallel_region_tiled(
+#                     output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
+#                 )
+#             else:
+#                 output_tensor = reduce_scatter_to_sequence_parallel_region(
+#                     output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
+#                 )
+#         else:
+#             output_tensor = reduce_from_tensor_model_parallel_region(
+#                 output_tensor, process_group=get_tp_group(self.config)
+#             )
+
+#         logger.debug(f"MLP output shape {output_tensor.shape}")
+#         return (output_tensor, residual)
+
+#     def _native_mlp(self, x, adapter_ids=None):
+#         logger.debug("MLP: native compiler")
+#         # all-gather is done here instead of CPL layers to
+#         # avoid 2 all-gathers from up and gate projections
+#         if self.sequence_parallel_enabled:
+#             x = gather_from_sequence_parallel_region(
+#                 x, self.sequence_dimension, process_group=get_tp_group(self.config)
+#             )
+#         gate_proj_output = (
+#             self.gate_proj(x)
+#             if not is_lora_module(self.gate_proj)
+#             else self.gate_proj(x, adapter_ids)
+#         )
+
+#         up_proj_output = (
+#             self.up_proj(x) if not is_lora_module(self.up_proj) else self.up_proj(x, adapter_ids)
+#         )
+
+#         down_proj_input = self.act_fn(gate_proj_output) * up_proj_output
+#         output = (
+#             self.down_proj(down_proj_input)
+#             if not is_lora_module(self.down_proj)
+#             else self.down_proj(down_proj_input, adapter_ids)
+#         )
+#         logger.debug(f"MLP output shape {output.shape}")
+#         return output
+
+#     def _neuron_mm(self, x):
+
+#         logger.info("-"*30 + " neuron_mm mlp " + "-"*30)
+
+#         # up = self.up_u_proj(self.up_v_proj(x))
+#         # gate = self.gate_u_proj(self.gate_v_proj(x))
+#         # return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
+        
+#         b, s, h = x.shape
+#         x = x.view(-1, h)
+#         # return nki_mm(x, self.up_v_proj.weight, self.up_u_proj.weight, 
+#         #      self.gate_v_proj.weight, self.gate_u_proj.weight,
+#         #      self.down_v_proj.weight, self.down_u_proj.weight)
+    
+
+#         result = svd_mlp_with_fused_kernel(
+#             x, self.up_v_proj.weight.t(), self.up_u_proj.weight.t(), 
+#             self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t(),  
+#             self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
+#         return result
+    
+#     def _svd_baseline(self, x):
+#         logger.info("-"*30 + " svd baseline mlp " + "-"*30)
+#         b, s, h = x.shape
+#         x = x.view(-1, h)
+#         up_v = nki_matmul_fully_optimized_(x.t(), self.up_v_proj.weight.t())
+#         up = nki_matmul_fully_optimized_(up_v.t(), self.up_u_proj.weight.t())
+#         gate_v = nki_matmul_fully_optimized_(x.t(), self.gate_v_proj.weight.t())
+#         gate = nki_matmul_fully_optimized_(gate_v.t(), self.gate_u_proj.weight.t())
+#         act = self.act_fn(gate) * up
+#         output_v = nki_matmul_fully_optimized_(act.t() , self.down_v_proj.weight.t())
+#         output = nki_matmul_fully_optimized_(output_v.t() , self.down_u_proj.weight.t())
+#         return output
+
+    
+#     def _svd_flash_mlp(self, x):
+
+#         logger.info("-"*30 + " svd-flash mlp " + "-"*30)
+#         b, s, h = x.shape
+#         return XUV_matmul(x.view(-1, h), self.up_v_proj.weight, self.up_u_proj.weight)  # TODO: Fix tiles padding
+
+
+#     def forward(self, x, rmsnorm=None, residual=None, adapter_ids=None):
+#         """
+#         If residual is passed in, will fuse its add into the MLP kernel
+#         If rmsnorm is passed in, will fuse the rmsnorm into the MLP kernel
+
+#         Returns a tuple of (output, residual), where residual is the output of the residual add
+#         """
+
+#         if self.mlp_kernel_enabled:
+#             # Quantized MLP kernel
+#             if self.quantized_mlp_kernel_enabled:
+#                 return self._kernel_enabled_quantized_mlp(
+#                     x, rmsnorm, residual, adapter_ids=adapter_ids
+#                 )
+#             # MLP kernel
+#             return self._kernel_enabled_mlp(x, rmsnorm, residual, adapter_ids=adapter_ids)
+#         else:
+#             # No kernel
+#             assert rmsnorm is None and residual is None
+#             # return (self._native_mlp(x, adapter_ids=adapter_ids), None)
+
+#             return (self._neuron_mm(x), None)
+#             # return (self._svd_baseline(x), None)
+
+################################################
+
+
+
+
+def linear_with_async_allreduce(
+    input: torch.Tensor,
+    weight0: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    async_grad_allreduce: bool,
+    sequence_parallel_enabled: bool,
+    sequence_dimension: Optional[int] = 0,
+    autograd_func_class: Type[torch.autograd.Function] = LinearWithAsyncCommunication,
+    save_for_backward: bool = True,
+    process_group: Optional[ProcessGroup] = None,
+) -> torch.Tensor:
+    args = cast_if_autocast_enabled(
+        input,
+        weight0,
+        weight,
+        bias,
+        async_grad_allreduce,
+        sequence_parallel_enabled,
+        sequence_dimension,
+        save_for_backward,
+        process_group,
+    )
+    verify_casted_dtype(args)
+    with torch.cuda.amp.autocast(enabled=False):
+        return autograd_func_class.apply(*args)
+
+
+
+def _initialize_affine_weight_neuron(
+    weight: torch.Tensor,
+    init_method: Callable[[torch.Tensor], None],
+    partition_dim: int,
+    num_partitions:int,
+    stride: int = 1,
+) -> None:
+    """Initialize affine weight for model parallel on Neuron device.
+
+    Args:
+        weight (Parameter):
+        init_method (Callable[[Tensor], None]): Taking a Tensor and initialize its elements.
+        partition_dim (int): Dimension to apply partition.
+    """
+
+    set_tensor_model_parallel_attributes(
+        tensor=weight,
+        is_parallel=True,
+        dim=partition_dim,
+        stride=stride,
+        num_partitions=num_partitions,
+    )
+
+    with get_xla_rng_tracker().fork():
+        init_method(weight)
+
+
+
+class SVDColumnParallelLinear(BaseParallelLinear):
+    """Linear layer with column parallelism.
+
+    The linear layer is defined as Y = XA + b. A is parallelized along
+    its second dimension as A = [A_1, ..., A_p]. Here A is the weight matrix,
+    X is the input.
+
+    .. note::
+        Input is supposed to be three dimensional and each dimension
+        is expected to be batch,sequence and hidden feature, respectively.
+
+    Arguments:
+        input_size: first dimension of matrix A.
+        output_size: second dimension of matrix A.
+        bias: If true, add bias
+        gather_output: If true, call all-gather on output and make Y available
+                       to all Neuron devices, otherwise, every Neuron device will have its output
+                       which is Y_i = XA_i
+        dtype: dtype of the weights
+        device: Device on which the weights should be initialized.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        rank_size: int,
+        output_size: int,
+        bias: bool = True,
+        gather_output: bool = True,
+        dtype: torch.dtype = torch.float32,
+        device: Optional[torch.device] = None,
+        stride: int = 1,
+        init_method: Optional[Callable[[Any], torch.Tensor]] = None,
+        sequence_parallel_enabled: bool = False,
+        sequence_dimension: Optional[int] = None,
+        keep_master_weight: bool = False,
+        skip_bias_add: bool = False,
+        pad: bool = False,
+        tensor_model_parallel_group: Optional[ProcessGroup] = None,
+    ):
+     
+        super().__init__()
+
+        # Keep input parameters
+        self.input_size = input_size
+        self.rank_size = rank_size
+        self.output_size = output_size
+        self.add_bias = bias
+        self.gather_output = gather_output
+        self.arg_init_method = init_method
+
+        self.tensor_parallel_group = tensor_model_parallel_group if \
+            tensor_model_parallel_group is not None else cast(ProcessGroup, get_tensor_model_parallel_group())
+
+        world_size = torch.distributed.get_world_size(group=self.tensor_parallel_group)
+        self.pad = pad
+        if self.pad:
+            self.pad_size = get_padding_length(self.output_size, world_size)
+            self.output_size = self.output_size + self.pad_size
+
+        # Divide the weight matrix along the last dimension.
+        self.output_size_per_partition = utils.divide(self.output_size, world_size)
+        self.dtype = dtype
+        self.device = device
+        self.stride = stride
+        self.keep_master_weight = keep_master_weight
+        self.skip_bias_add = skip_bias_add
+        self.bias_shape: Optional[Tuple[int]]
+
+        self.initialize_weight_and_bias()
+
+        self.async_tensor_model_parallel_allreduce = not sequence_parallel_enabled and world_size > 1
+        if sequence_parallel_enabled:
+            if world_size <= 1:
+                warnings.warn(f"`sequence_parallel_enabled` is set to `True`, but got world_size of {world_size}")
+
+            if sequence_dimension is None:
+                warnings.warn(
+                    "`sequence_parallel_enabled` is set to `True`, but got `sequence_dimension` as `None`. Defaulting `sequence_dimension` to 0."
+                )
+                sequence_dimension = 0
+
+        self.sequence_parallel_enabled = sequence_parallel_enabled
+        self.sequence_dimension = sequence_dimension
+
+        if self.async_tensor_model_parallel_allreduce and self.sequence_parallel_enabled:
+            raise RuntimeError(
+                "`async_tensor_model_parallel_allreduce` and `sequence_parallel_enabled` cannot be enabled at the same time."
+            )
+
+        self._forward_impl = linear_with_async_allreduce
+
+    def set_weight_and_bias_config(self) -> None:
+        # Note: torch.nn.functional.linear performs XA^T + b and as a result
+        # we allocate the transpose.
+        # self.weight_shape = (self.output_size_per_partition, self.input_size)
+
+        self.weight_shape = (self.output_size_per_partition, self.rank_size)
+        self.weight_partition_dim = 0
+
+        if self.add_bias:
+            bias_size = self.output_size if self.gather_output else self.output_size_per_partition
+            self.bias_shape = (bias_size,)
+        else:
+            self.bias_shape = None
+
+    def initialize_weight_and_bias(self):
+        self.set_weight_and_bias_config()
+        init_device = self.device
+
+        # Get torch init device if device is not explicitly mentioned
+        self.weight_u = Parameter(torch.empty((self.rank_size, self.input_size), device=init_device, dtype=self.dtype))
+        self.weight_v = Parameter(torch.empty(*self.weight_shape, device=init_device, dtype=self.dtype))
+        # Mark the true device after weight initialization
+        self.device = self.weight_v.device
+
+        # Initialize weight.
+        if self.device.type == "cpu":
+            self.init_weight_cpu()
+        elif self.device.type == "meta":
+            utils.set_tensor_model_parallel_attributes(
+                tensor=self.weight_v, is_parallel=True, dim=self.weight_partition_dim,
+                stride=self.stride, num_partitions=self.tensor_parallel_group.size(),
+            )
+        else:
+            _initialize_affine_weight_neuron(
+                self.weight_v, self._init_weight, partition_dim=self.weight_partition_dim,
+                num_partitions=self.tensor_parallel_group.size(),
+                stride=self.stride
+            )
+        if self.add_bias:
+            assert self.bias_shape
+            if self.device is None or self.device.type == "cpu":
+                self.bias = Parameter(torch.empty(*self.bias_shape, dtype=self.dtype))
+            else:
+                self.bias = Parameter(torch.empty(*self.bias_shape, device=self.device, dtype=self.dtype))
+            if self.bias.device != torch.device("meta"):
+                self._init_bias()
+
+            if not self.gather_output:
+                set_tensor_model_parallel_attributes(
+                    self.bias, True, 0, stride=self.stride, num_partitions=self.tensor_parallel_group.size(),
+                )
+        else:
+            self.register_parameter("bias", None)
+
+    def init_weight_cpu(self) -> None:
+        self.master_weight = _initialize_parameter_cpu(
+            param=self.weight_v,
+            partition_dim=self.weight_partition_dim,
+            num_partitions=self.tensor_parallel_group.size(),
+            init_method=self._init_weight,
+            param_dtype=self.dtype,
+            stride=self.stride,
+            return_master_param=self.keep_master_weight,
+        )
+
+    def forward(self, input: torch.Tensor, *_: Any) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Forward of ColumnParallelLinear
+
+        Args:
+            input_: 3D tensor whose order of dimension is [batch, sequence, hidden]
+
+        Returns:
+            - output
+        """
+        if self.pad and self.training:
+            raise RuntimeError("`pad=True` is only supported for inference. Set model.eval()")
+
+        if self.async_tensor_model_parallel_allreduce or self.sequence_parallel_enabled:
+            input_parallel = input
+        else:
+            input_parallel = copy_to_tensor_model_parallel_region(input, process_group=self.tensor_parallel_group)
+
+        # Matrix multiply.
+        output_parallel = self._forward_impl(
+            input=input_parallel,
+            weight0=self.weight_u,
+            weight=self.weight_v,
+            bias=None,
+            async_grad_allreduce=self.async_tensor_model_parallel_allreduce,
+            sequence_parallel_enabled=self.sequence_parallel_enabled,
+            sequence_dimension=self.sequence_dimension,
+            autograd_func_class=NkiLinearWithAsyncCommunication,
+            process_group=self.tensor_parallel_group
+        )
+        if self.gather_output:
+            # All-gather across the partitions.
+            assert not self.sequence_parallel_enabled
+            output = gather_from_tensor_model_parallel_region(output_parallel, process_group=self.tensor_parallel_group)
+            if self.pad and self.pad_size > 0:
+                output = torch.narrow(output, -1, 0, self.output_size - self.pad_size)
+        else:
+            output = output_parallel
+        if self.skip_bias_add:
+            return output, self.bias
+        output = (output + self.bias) if self.bias is not None else output
+        return output
+
+    def preshard_hook(self, model_state_dict: Dict[str, Any], prefix: str) -> None:
+        if not self.pad or self.pad_size == 0:
+            return
+        if self.output_size != model_state_dict[prefix].shape[0] + self.pad_size:
+            size = model_state_dict[prefix].shape[0]
+            raise RuntimeError(f"State dict {prefix} is of an unexpected size {size} expected {size - self.pad_size}")
+        model_state_dict[prefix] = torch.nn.functional.pad(model_state_dict[prefix], (0, 0, 0, self.pad_size))
+
+
+class NkiLinearWithAsyncCommunication(LinearWithAsyncCommunication):
+    """Linear layer execution with asynchronous communication."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        weight0: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor],
+        async_grad_allreduce: bool,
+        sequence_parallel_enabled: bool,
+        sequence_dimension: Optional[int] = 0,
+        save_for_backward: bool = True,
+        process_group: Optional[ProcessGroup] = None,
+        reduce_dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        ctx.use_bias = bias is not None and weight.requires_grad
+        ctx.async_grad_allreduce = async_grad_allreduce
+        ctx.sequence_parallel_enabled = sequence_parallel_enabled
+        ctx.sequence_dimension = sequence_dimension
+        ctx.compute_weight_gradient = weight.requires_grad
+        if process_group is None:
+            process_group = get_tensor_model_parallel_group(as_list=True)
+        ctx.process_group = process_group
+        ctx.reduce_dtype = reduce_dtype
+
+        if ctx.sequence_parallel_enabled:
+            assert (
+                ctx.sequence_dimension is not None
+            ), "Found `sequence_parallel_enabled` set to True, but `sequence_dimension` was None, and this occured in an unexpected area"
+
+        if save_for_backward:
+            if ctx.compute_weight_gradient:
+                ctx.save_for_backward(input, weight)
+            else:
+                ctx.save_for_backward(weight)
+
+        
+        ####################### old
+        total_input = input
+        # if total_input.shape[1] == 1:
+        #     # output = nki_sinle_token_matmul_(total_input, weight)
+        #     # output = nki_sinle_token_matmul_2(total_input.transpose(1, 2), weight.t())
+        #     # output = torch.einsum('...m,mn->...n', total_input, weight.t())
+        #     output = torch.einsum('...m,mn,nk->...k', total_input, weight0.t(), weight.t())
+
+        # else:
+        #     B, M, K = total_input.shape
+        #     total_input = total_input.view(-1, K)
+        #     # print("total_input.shape: ", total_input.shape)
+        #     # print("weight0.t().shape: ", weight0.t().shape)
+        #     # print("weight.t().shape: ", weight.t().shape)
+         
+            
+        #     output = fused_three_mm_XTUV(total_input.t(), weight0.t(), weight.t())
+        #     output = output.reshape(B, M, -1)
+        #######################
+        
+        # B, M, K = total_input.shape
+        # total_input = total_input.view(-1, K)
+        # print("total_input.shape: ", total_input.shape)
+        # print("weight0.t().shape: ", weight0.t().shape)
+        # print("weight.t().shape: ", weight.t().shape)
+        
+        output = fused_three_mm_XTUV(total_input, weight0.t(), weight.t())
+        # output = output.reshape(B, M, -1)
+        #######################
+    
+        print("output.shape: ", output.shape)
+        if bias is not None:
+            output = output + bias
+        return output
+
+
+
+class SVDRowParallelLinear(BaseParallelLinear):
+    """Linear layer with row parallelism.
+
+    The linear layer is defined as Y = XA + b. A is parallelized along
+    its first dimension and X along its second dimension as:
+               -   -
+              | A_1 |
+              | .   |
+          A = | .   |        X = [X_1, ..., X_p]
+              | .   |
+              | A_p |
+               -   -
+
+    .. note::
+        Input(X) is supposed to be three dimensional and each dimension
+        is expected to be batch, sequence, and hidden feature, respectively.
+        A is the weight matrix.
+
+    Arguments:
+        input_size: first dimension of matrix A.
+        output_size: second dimension of matrix A.
+        bias: If true, add bias. Note that bias is not parallelized.
+        input_is_parallel: If true, we assume that the input is already
+                           split across the Neuron devices and we do not split
+                           again.
+        dtype: dtype of the weights
+        device: Device on which the weights should be initialized.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        rank_size: int,
+        output_size: int,
+        bias: bool = True,
+        input_is_parallel: bool = False,
+        dtype: torch.dtype = torch.float32,
+        device: Optional[torch.device] = None,
+        stride: int = 1,
+        init_method: Optional[Callable[..., Any]] = None,
+        sequence_parallel_enabled: bool = False,
+        sequence_dimension: Optional[int] = None,
+        keep_master_weight: bool = False,
+        skip_bias_add: bool = False,
+        pad: bool = False,
+        reduce_output: bool = True,
+        tensor_model_parallel_group: Optional[ProcessGroup] = None,
+        reduce_dtype: torch.dtype = None,
+    ):
+        # super().__init__(
+        # input_size=input_size,
+        # output_size=output_size,
+        # bias=bias,
+        # input_is_parallel=input_is_parallel,
+        # dtype=dtype,
+        # device=device,
+        # stride=stride,
+        # init_method=init_method,
+        # sequence_parallel_enabled=sequence_parallel_enabled,
+        # sequence_dimension= sequence_dimension,
+        # keep_master_weight=keep_master_weight,
+        # skip_bias_add=skip_bias_add,
+        # pad=pad,
+        # reduce_output=reduce_output,
+        # tensor_model_parallel_group=tensor_model_parallel_group,
+        # reduce_dtype=reduce_dtype)
+        
+        super().__init__()
+        # Keep input parameters
+        self.input_size = input_size
+        self.rank_size = rank_size
+        self.output_size = output_size
+        self.add_bias = bias
+        self.input_is_parallel = input_is_parallel
+        self.pad = pad
+        self.reduce_output = reduce_output
+        self.tensor_parallel_group = tensor_model_parallel_group if \
+            tensor_model_parallel_group is not None else cast(ProcessGroup, get_tensor_model_parallel_group())
+
+        if reduce_dtype is None:
+            reduce_dtype = dtype
+            
+        # hardware_type = hardware(get_platform_target())
+        # # Updating the reduction dtype to be FLOAT32 to reduce errors due to precision
+        # if os.getenv("XLA_DOWNCAST_BF16") == "1" and hardware_type == hardware.TRN2:
+        #     if reduce_dtype==torch.float32:
+        #         reduce_dtype=torch.float64
+
+        self.reduce_dtype = reduce_dtype
+
+        world_size = self.tensor_parallel_group.size()
+        if self.pad:
+            self.pad_size = get_padding_length(self.input_size, world_size)
+            self.input_size = self.input_size + self.pad_size
+        # Divide the weight matrix along the last dimension.
+        self.input_size_per_partition = utils.divide(self.input_size, world_size)
+        self.arg_init_method = init_method
+        self.sequence_parallel_enabled = sequence_parallel_enabled
+        if self.sequence_parallel_enabled and not self.input_is_parallel:
+            raise RuntimeError("To enable `sequence_parallel_enabled`, `input_is_parallel` must be `True`")
+
+        if self.sequence_parallel_enabled and sequence_dimension is None:
+            warnings.warn(
+                "`sequence_parallel_enabled` is set to `True`, but got `sequence_dimension` as `None`. Defaulting `sequence_dimension` to 0."
+            )
+            sequence_dimension = 0
+
+        self.sequence_dimension: int = sequence_dimension  # type: ignore
+        self.dtype = dtype
+        self.device = device
+        self.stride = stride
+        self.keep_master_weight = keep_master_weight
+        self.skip_bias_add = skip_bias_add
+        self.bias_shape: Optional[Tuple[int]]
+        self.initialize_weight_and_bias()
+
+        self._forward_impl = linear_with_async_allreduce
+
+    def set_weight_and_bias_config(self) -> None:
+        # Note: torch.nn.functional.linear performs XA^T + b and as a result
+        # we allocate the transpose.
+        self.weight_shape = (self.rank_size, self.input_size_per_partition)
+        self.weight_partition_dim = 1
+
+        if self.add_bias:
+            self.bias_shape = (self.output_size,)
+        else:
+            self.bias_shape = None
+
+    def initialize_weight_and_bias(self) -> None:
+        self.set_weight_and_bias_config()
+        init_device = self.device
+        
+        self.weight_v = Parameter(torch.empty((self.output_size, self.rank_size), device=init_device, dtype=self.dtype))
+
+        # Get torch init device if device is not explicitly mentioned
+        self.weight_u = Parameter(torch.empty(*self.weight_shape, device=init_device, dtype=self.dtype))
+        self.device = self.weight_u.device
+
+        # Initialize weight.
+        if self.device.type == "cpu":
+            self.init_weight_cpu()
+        elif self.device.type == "meta":
+            set_tensor_model_parallel_attributes(
+                tensor=self.weight_u, is_parallel=True, dim=self.weight_partition_dim,
+                stride=self.stride, num_partitions=self.tensor_parallel_group.size(),
+            )
+        else:
+            _initialize_affine_weight_neuron(
+                self.weight_u, self._init_weight, partition_dim=self.weight_partition_dim,
+                num_partitions=self.tensor_parallel_group.size(),
+                stride=self.stride,
+            )
+
+        if self.add_bias:
+            assert self.bias_shape
+            if self.device is None or self.device.type == "cpu":
+                self.bias = Parameter(torch.empty(*self.bias_shape, dtype=self.dtype))
+            else:
+                self.bias = Parameter(torch.empty(*self.bias_shape, device=self.device, dtype=self.dtype))
+            if self.bias.device != torch.device("meta"):
+                self._init_bias()
+            setattr(self.bias, "sequence_parallel_enabled", self.sequence_parallel_enabled)
+        else:
+            self.register_parameter("bias", None)
+
+    def init_weight_cpu(self) -> None:
+        self.master_weight = _initialize_parameter_cpu(
+            param=self.weight_u,
+            partition_dim=self.weight_partition_dim,
+            num_partitions=self.tensor_parallel_group.size(),
+            init_method=self._init_weight,
+            param_dtype=self.dtype,
+            stride=self.stride,
+            return_master_param=self.keep_master_weight,
+        )
+
+    def _init_bias(self) -> None:
+        bound = 1 / math.sqrt(self.input_size_per_partition) if self.input_size_per_partition > 0 else 0
+        torch.nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, input_: torch.Tensor) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Forward of RowParallelLinear
+
+        Args:
+            input_: 3D tensor whose order of dimension is [batch, sequence, hidden]
+
+        Returns:
+            - output
+        """
+        if self.pad and self.training:
+            raise RuntimeError("`pad=True` is only supported for inference. Set model.eval()")
+
+        # Set up backprop all-reduce.
+        if self.input_is_parallel:
+            input_parallel = input_
+        else:
+            if self.pad and self.pad_size > 0:
+                input_ = torch.nn.functional.pad(input_, (0, self.pad_size))
+            assert not self.sequence_parallel_enabled
+            input_parallel = scatter_to_tensor_model_parallel_region(input_, process_group=self.tensor_parallel_group)
+
+        # Matrix multiply.
+        output_ = self._forward_impl(
+            input=input_parallel,
+            weight0=self.weight_u,
+            weight=self.weight_v,
+            bias=None,
+            async_grad_allreduce=False,
+            sequence_parallel_enabled=False,
+            sequence_dimension=self.sequence_dimension,
+            autograd_func_class=NkiLinearWithAsyncCommunication,
+            process_group=self.tensor_parallel_group,
+        )
+
+        if self.reduce_output:
+            # All-reduce across all the partitions.
+            original_dtype = output_.dtype
+
+            output_ = output_.to(self.reduce_dtype)
+
+            if self.sequence_parallel_enabled:
+                output_ = reduce_scatter_to_sequence_parallel_region(
+                    output_, self.sequence_dimension, process_group=self.tensor_parallel_group,
+                )
+            else:
+                output_ = reduce_from_tensor_model_parallel_region(
+                    output_, process_group=self.tensor_parallel_group,
+                )
+
+            output_ = output_.to(original_dtype)
+
+        if self.skip_bias_add:
+            return output_, self.bias
+        output = (output_ + self.bias) if self.bias is not None else output_
+        return output
+
+    def preshard_hook(self, model_state_dict: dict, prefix: str) -> None:
+        if not self.pad or self.pad_size == 0:
+            return
+        if self.input_size != model_state_dict[prefix].shape[1] + self.pad_size:
+            size = model_state_dict[prefix].shape[1]
+            raise RuntimeError(f"State dict {prefix} is of an unexpected size {size} expected {size - self.pad_size}")
+        model_state_dict[prefix] = torch.nn.functional.pad(model_state_dict[prefix], (0, self.pad_size))
+
+
+
+
 
 class NeuronLlamaMLP_SVD(nn.Module):
     """
@@ -1197,17 +2448,19 @@ class NeuronLlamaMLP_SVD(nn.Module):
         self.sequence_dimension = 1 if self.sequence_parallel_enabled else None
         self.rms_norm_eps = config.rms_norm_eps
         self.mlp_kernel_enabled = self.neuron_config.mlp_kernel_enabled
-        self.fused_rmsnorm_skip_gamma = self.config.neuron_config.fused_rmsnorm_skip_gamma
+        # self.fused_rmsnorm_skip_gamma = self.config.neuron_config.fused_rmsnorm_skip_gamma
         self.quantized_mlp_kernel_enabled = self.neuron_config.quantized_mlp_kernel_enabled
         self.rmsnorm_quantize_kernel_enabled = self.neuron_config.rmsnorm_quantize_kernel_enabled
-        self.quantize_clamp_bound = self.neuron_config.quantize_clamp_bound
-        self.logical_nc_config = self.neuron_config.logical_nc_config
-        self.activation_quantization_type = self.neuron_config.activation_quantization_type
+        # self.quantize_clamp_bound = self.neuron_config.quantize_clamp_bound
+        # self.logical_nc_config = self.neuron_config.logical_nc_config
+        # self.activation_quantization_type = self.neuron_config.activation_quantization_type
         mlp_bias = getattr(config, "mlp_bias", False)
 
         ############################################ SVD-Flash
         # self.low_rank = int(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / (self.intermediate_size + self.hidden_size))
         # self.low_rank = math.ceil(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        # self.low_rank = round(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size) * 128)) * 128
+        # self.low_rank = int(self.intermediate_size * self.hidden_size * 0.8 / ((self.intermediate_size + self.hidden_size))) 
         self.low_rank = round(self.intermediate_size * self.hidden_size * self.config.metadata["compress_ratio"] / ((self.intermediate_size + self.hidden_size) * 128)) * 128
 
         ############################################
@@ -1226,6 +2479,8 @@ class NeuronLlamaMLP_SVD(nn.Module):
                     get_padding_length(self.intermediate_size // tp_degree, 128) * tp_degree
                 )
                 logger.debug(f"Quantized intermediate_size: {self.intermediate_size}")
+            
+            
             
             ############################################ original
             # self.gate_proj = ColumnParallelLinear(
@@ -1263,83 +2518,127 @@ class NeuronLlamaMLP_SVD(nn.Module):
             #     reduce_dtype=config.neuron_config.rpl_reduce_dtype,
             # )
             ############################################
-
-            ############################################ SVD-Flash
-            self.gate_v_proj = ColumnParallelLinear(
-                self.hidden_size,
-                self.low_rank,
-                bias=mlp_bias,
-                gather_output=False,
-                dtype=config.neuron_config.torch_dtype,
-                pad=True,
-                sequence_parallel_enabled=False,
-                sequence_dimension=None,
-                tensor_model_parallel_group=get_tp_group(config),
-            )
             
-            self.gate_u_proj = ColumnParallelLinear(
-                self.low_rank,
-                self.intermediate_size,
-                bias=mlp_bias,
-                gather_output=False,
-                dtype=config.neuron_config.torch_dtype,
-                pad=True,
-                sequence_parallel_enabled=False,
-                sequence_dimension=None,
-                tensor_model_parallel_group=get_tp_group(config),
-            )
+            if self.tp_degree > 1:
+                
+                self.gate_proj = SVDColumnParallelLinear(
+                    self.hidden_size,
+                    self.low_rank,
+                    self.intermediate_size,
+                    bias=mlp_bias,
+                    gather_output=False,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=False,
+                    sequence_dimension=None,
+                    tensor_model_parallel_group=get_tp_group(config),
+                )
+                
+                self.up_proj = SVDColumnParallelLinear(
+                    self.hidden_size,
+                    self.low_rank,
+                    self.intermediate_size,
+                    bias=mlp_bias,
+                    gather_output=False,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=False,
+                    sequence_dimension=None,
+                    tensor_model_parallel_group=get_tp_group(config),
+                )
+                
+                self.down_proj = SVDRowParallelLinear(
+                    self.intermediate_size,
+                    self.low_rank,
+                    self.hidden_size,
+                    bias=mlp_bias,
+                    input_is_parallel=True,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=self.sequence_parallel_enabled,
+                    sequence_dimension=self.sequence_dimension,
+                    tensor_model_parallel_group=get_tp_group(config),
+                    reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+                )
+                    
             
-            self.up_v_proj = ColumnParallelLinear(
-                self.hidden_size,
-                self.low_rank,
-                bias=mlp_bias,
-                gather_output=False,
-                dtype=config.neuron_config.torch_dtype,
-                pad=True,
-                sequence_parallel_enabled=False,
-                sequence_dimension=None,
-                tensor_model_parallel_group=get_tp_group(config),
-            )
+            else:
+                ############################################ SVD-Flash
+                self.gate_v_proj = ColumnParallelLinear(
+                    self.hidden_size,
+                    self.low_rank,
+                    bias=mlp_bias,
+                    gather_output=False,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=False,
+                    sequence_dimension=None,
+                    tensor_model_parallel_group=get_tp_group(config),
+                )
+                
+                self.gate_u_proj = ColumnParallelLinear(
+                    self.low_rank,
+                    self.intermediate_size,
+                    bias=mlp_bias,
+                    gather_output=False,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=False,
+                    sequence_dimension=None,
+                    tensor_model_parallel_group=get_tp_group(config),
+                )
+                
+                self.up_v_proj = ColumnParallelLinear(
+                    self.hidden_size,
+                    self.low_rank,
+                    bias=mlp_bias,
+                    gather_output=False,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=False,
+                    sequence_dimension=None,
+                    tensor_model_parallel_group=get_tp_group(config),
+                )
 
-            self.up_u_proj = ColumnParallelLinear(
-                self.low_rank,
-                self.intermediate_size,
-                bias=mlp_bias,
-                gather_output=False,
-                dtype=config.neuron_config.torch_dtype,
-                pad=True,
-                sequence_parallel_enabled=False,
-                sequence_dimension=None,
-                tensor_model_parallel_group=get_tp_group(config),
-            )
+                self.up_u_proj = ColumnParallelLinear(
+                    self.low_rank,
+                    self.intermediate_size,
+                    bias=mlp_bias,
+                    gather_output=False,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=False,
+                    sequence_dimension=None,
+                    tensor_model_parallel_group=get_tp_group(config),
+                )
 
-            self.down_v_proj = RowParallelLinear(
-                self.intermediate_size,
-                self.low_rank,
-                bias=mlp_bias,
-                input_is_parallel=True,
-                dtype=config.neuron_config.torch_dtype,
-                pad=True,
-                sequence_parallel_enabled=self.sequence_parallel_enabled,
-                sequence_dimension=self.sequence_dimension,
-                tensor_model_parallel_group=get_tp_group(config),
-                reduce_dtype=config.neuron_config.rpl_reduce_dtype,
-            )
+                self.down_v_proj = RowParallelLinear(
+                    self.intermediate_size,
+                    self.low_rank,
+                    bias=mlp_bias,
+                    input_is_parallel=True,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=self.sequence_parallel_enabled,
+                    sequence_dimension=self.sequence_dimension,
+                    tensor_model_parallel_group=get_tp_group(config),
+                    reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+                )
 
-            self.down_u_proj = RowParallelLinear(
-                self.low_rank,
-                self.hidden_size,
-                bias=mlp_bias,
-                input_is_parallel=True,
-                dtype=config.neuron_config.torch_dtype,
-                pad=True,
-                sequence_parallel_enabled=self.sequence_parallel_enabled,
-                sequence_dimension=self.sequence_dimension,
-                tensor_model_parallel_group=get_tp_group(config),
-                reduce_dtype=config.neuron_config.rpl_reduce_dtype,
-            )
-            ############################################
-            
+                self.down_u_proj = RowParallelLinear(
+                    self.low_rank,
+                    self.hidden_size,
+                    bias=mlp_bias,
+                    input_is_parallel=True,
+                    dtype=config.neuron_config.torch_dtype,
+                    pad=True,
+                    sequence_parallel_enabled=self.sequence_parallel_enabled,
+                    sequence_dimension=self.sequence_dimension,
+                    tensor_model_parallel_group=get_tp_group(config),
+                    reduce_dtype=config.neuron_config.rpl_reduce_dtype,
+                )
+                ############################################
+                
             if self.mlp_kernel_enabled:
                 if self.neuron_config.quantized_mlp_kernel_enabled:
                     setattr(
@@ -1368,273 +2667,7 @@ class NeuronLlamaMLP_SVD(nn.Module):
             self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=mlp_bias)
             self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=mlp_bias)
 
-    def _kernel_enabled_quantized_mlp(self, x, rmsnorm, residual, adapter_ids):
-        full_seqlen = x.shape[1] * (self.config.neuron_config.tp_degree if self.sequence_parallel_enabled else 1)
-        if full_seqlen <= self.neuron_config.seq_len_threshold_for_cc_tiling:  # Keep regular grid for TKG.
-            grid = (nc(self.logical_nc_config),)
-        else:  # Add CC pipelining dim for CTE kernel grid
-            grid = (CCPipeline(self.neuron_config.cc_pipeline_tiling_factor) * nc(self.logical_nc_config),)
-        fused_residual = residual is not None
-        fused_rmsnorm = rmsnorm is not None
-        logger.debug(
-            f"MLP: quantized kernel, fused_residual={fused_residual}, fused_rmsnorm={fused_rmsnorm}, logical_nc_config={self.logical_nc_config}"
-        )
-
-        # Can't do residual add in the kernel if SP is enabled
-        if fused_residual:
-            assert (
-                not self.sequence_parallel_enabled
-            ), "Quantized MLP cannot have both fused residual add and sequence parallel RMSnorm!"
-            # Using fused residual add
-            _mlp_fwd_call = nki_jit()(quant_mlp_fused_add_isa_kernel)
-        else:
-            _mlp_fwd_call = nki_jit()(quant_mlp_isa_kernel)
-
-        if fused_rmsnorm:
-            ln_w = rmsnorm.weight.unsqueeze(0)
-        else:
-            ln_w = torch.zeros(size=(1, self.hidden_size), dtype=x.dtype, device=x.device)
-
-        # Handle SP RMSnorm
-        x_orig_dtype = x.dtype
-        if self.sequence_parallel_enabled:
-            # This RMSNormQuant kernel will do quantization inside, so we pass the
-            # clamp_bound for clipping.
-            # If we don't use this kernel, the MLP kernel below will do the
-            # quantization, so we also pass clamp_bound to that kernel.
-            if self.rmsnorm_quantize_kernel_enabled:
-                logger.debug(
-                    "Running Quantized MLP kernel with sequence-parallel RMSnorm-Quantize kernel!"
-                )
-                _rmsnorm_quant_fwd_call = nki_jit()(rmsnorm_quant_isa_kernel)
-                quant_rmsnorm_out = torch.zeros(
-                    size=(
-                        x.shape[0],  # batch size
-                        x.shape[1],  # sequence length
-                        x.shape[2] + 4,  # hidden size + 4 bytes for packing fp32 scale
-                    ),
-                    dtype=torch.int8,
-                    device=x.device,
-                )
-                clamp_bound = self.quantize_clamp_bound
-                _rmsnorm_quant_fwd_call[grid](
-                    x, ln_w, clamp_bound, quant_rmsnorm_out, kernel_name="QuantOnly"
-                )
-                x = gather_from_sequence_parallel_region(
-                    quant_rmsnorm_out,
-                    self.sequence_dimension,
-                    process_group=get_tp_group(self.config),
-                    tile_cc=self.neuron_config.tile_cc,
-                )
-
-            else:
-                logger.debug(
-                    "Running Quantized MLP kernel with external (native compiler) sequence-parallel RMSnorm!"
-                )
-                x = gather_from_sequence_parallel_region(
-                    x, self.sequence_dimension, process_group=get_tp_group(self.config), tile_cc=self.neuron_config.tile_cc
-                )
-
-        # Build output tensor
-        output_tensor_seqlen = x.shape[1]
-        output_tensor = torch.zeros(
-            size=(
-                x.shape[0],  # batch size
-                output_tensor_seqlen,
-                self.hidden_size,  # hidden size
-            ),
-            dtype=x_orig_dtype,
-            device=x.device,
-        )
-
-        # Grab weights
-        # all weights of the layers are stored in (out, in) shape
-        # unsqueeze so that shape of RMS gamma weight is [1, hidden] instead of [hidden]
-        gate_w = self.gate_proj.weight.data
-        gate_w_scale = self.gate_proj.scale
-        up_w = self.up_proj.weight.data
-        up_w_scale = self.up_proj.scale
-        down_w = self.down_proj.weight.data
-        down_w_scale = self.down_proj.scale
-        clamp_bound = self.quantize_clamp_bound
-
-        if fused_residual:
-            residual_output_tensor = torch.zeros(
-                size=(
-                    x.shape[0],  # batch size
-                    output_tensor_seqlen,
-                    self.hidden_size,  # hidden size
-                ),
-                dtype=x.dtype,
-                device=x.device,
-            )
-
-            _mlp_fwd_call[grid](
-                x,  # attn_output
-                residual,  # hidden
-                ln_w,  # ln_w
-                gate_w,  # gate_w
-                gate_w_scale,
-                up_w,  # up_w
-                up_w_scale,
-                down_w,  # down_w
-                down_w_scale,
-                clamp_bound,
-                output_tensor,  # out
-                add_out=residual_output_tensor,
-                fused_rmsnorm=fused_rmsnorm,
-                eps=self.rms_norm_eps,
-                kernel_name="MLP",
-                store_add=True,
-            )
-            residual = residual_output_tensor
-        else:
-            _mlp_fwd_call[grid](
-                x,  # hidden
-                # should be fine to pass gamma is as a dummy even if not using fused rmsnorm
-                ln_w,
-                gate_w,  # gate_w
-                gate_w_scale,
-                up_w,  # up_w
-                up_w_scale,
-                down_w,  # down_w
-                down_w_scale,
-                clamp_bound,
-                output_tensor,  # out
-                # Run RMSNorm inside the kernel if NOT using SP rmsnorm
-                fused_rmsnorm=fused_rmsnorm,
-                eps=self.rms_norm_eps,
-                kernel_name="MLP",
-            )
-            residual = None
-
-        # All-reduce or reduce-scatter, depending on whether SP is enabled
-        if self.sequence_parallel_enabled:
-            if self.neuron_config.tile_cc:
-                output_tensor = reduce_scatter_to_sequence_parallel_region_tiled(
-                    output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-                )
-            else:
-                output_tensor = reduce_scatter_to_sequence_parallel_region(
-                    output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-                )
-        else:
-            output_tensor = reduce_from_tensor_model_parallel_region(output_tensor)
-
-        logger.debug(f"Quantized MLP output shape {output_tensor.shape}")
-        return (output_tensor, residual)
-
-    def _kernel_enabled_mlp(self, x, rmsnorm, residual, adapter_ids):
-        fused_residual = residual is not None
-        fused_rmsnorm = rmsnorm is not None
-        logger.debug(
-            f"MLP: kernel, fused_residual={fused_residual}, fused_rmsnorm={fused_rmsnorm}, skip_gamma={self.fused_rmsnorm_skip_gamma}, logical_nc_config={self.logical_nc_config}"
-        )
-
-        # Choose which kernel to call
-        if fused_residual:
-            assert (
-                not self.sequence_parallel_enabled
-            ), "MLP kernel cannot have both fused residual add and sequence parallel RMSnorm!"
-            # Using fused residual add
-            _mlp_fwd_call = nki_jit()(mlp_fused_add_isa_kernel)
-        else:
-            _mlp_fwd_call = nki_jit()(mlp_isa_kernel)
-
-        if self.sequence_parallel_enabled:
-            x = gather_from_sequence_parallel_region(
-                x, self.sequence_dimension, process_group=get_tp_group(self.config), tile_cc=self.neuron_config.tile_cc
-            )
-
-        # Build output tensor
-        output_tensor_seqlen = x.shape[1]
-        output_tensor = torch.zeros(
-            size=(
-                x.shape[0],  # batch size
-                output_tensor_seqlen,
-                self.hidden_size,  # hidden size
-            ),
-            dtype=x.dtype,
-            device=x.device,
-        )
-
-        # Grab weights
-        # all weights of the layers are stored in (out, in) shape
-        # unsqueeze so that shape of RMS gamma weight is [1, hidden] instead of [hidden]
-        if fused_rmsnorm:
-            ln_w = rmsnorm.weight.unsqueeze(0)
-        else:
-            ln_w = torch.zeros(size=(1, self.hidden_size), dtype=x.dtype, device=x.device)
-        gate_w = self.gate_proj.weight.data
-        up_w = self.up_proj.weight.data
-        down_w = self.down_proj.weight.data
-
-        if output_tensor_seqlen <= self.neuron_config.seq_len_threshold_for_cc_tiling:  # Keep regular grid for TKG. Messes up the MLP impl
-            grid = (nc(self.logical_nc_config),)
-        else:  # Add CC pipelining dim for CTE kernel grid
-            grid = (CCPipeline(self.neuron_config.cc_pipeline_tiling_factor) * nc(self.logical_nc_config),)
-
-        if fused_residual:
-            residual_output_tensor = torch.zeros(
-                size=(
-                    x.shape[0],  # batch size
-                    output_tensor_seqlen,
-                    self.hidden_size,  # hidden size
-                ),
-                dtype=x.dtype,
-                device=x.device,
-            )
-
-            _mlp_fwd_call[grid](
-                x,  # attn_output
-                residual,  # hidden
-                ln_w,  # ln_w
-                gate_w,  # gate_w
-                up_w,  # up_w
-                down_w,  # down_w
-                output_tensor,  # out
-                kernel_name="MLP",
-                add_out=residual_output_tensor,
-                fused_rmsnorm=fused_rmsnorm,
-                skip_gamma=self.fused_rmsnorm_skip_gamma,
-                eps=self.rms_norm_eps,
-                store_add=True,
-            )
-            residual = residual_output_tensor
-        else:
-            _mlp_fwd_call[grid](
-                x,  # hidden
-                # should be fine to pass gamma is as a dummy even if not using fused rmsnorm
-                ln_w,
-                gate_w,
-                up_w,
-                down_w,
-                output_tensor,  # out
-                kernel_name="MLP",
-                # Run RMSNorm inside the kernel if NOT using SP rmsnorm
-                fused_rmsnorm=fused_rmsnorm,
-                skip_gamma=self.fused_rmsnorm_skip_gamma,
-                eps=self.rms_norm_eps,
-            )
-            residual = None
-
-        # All-reduce or reduce-scatter, depending on whether SP is enabled
-        if self.sequence_parallel_enabled:
-            if self.neuron_config.tile_cc:
-                output_tensor = reduce_scatter_to_sequence_parallel_region_tiled(
-                    output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-                )
-            else:
-                output_tensor = reduce_scatter_to_sequence_parallel_region(
-                    output_tensor, self.sequence_dimension, process_group=get_tp_group(self.config),
-                )
-        else:
-            output_tensor = reduce_from_tensor_model_parallel_region(
-                output_tensor, process_group=get_tp_group(self.config)
-            )
-
-        logger.debug(f"MLP output shape {output_tensor.shape}")
-        return (output_tensor, residual)
+    
 
     def _native_mlp(self, x, adapter_ids=None):
         logger.debug("MLP: native compiler")
@@ -1665,24 +2698,94 @@ class NeuronLlamaMLP_SVD(nn.Module):
 
     def _neuron_mm(self, x):
 
-        logger.info("-"*30 + " neuron_mm mlp " + "-"*30)
+        # logger.info("-"*30 + " neuron_mm mlp " + "-"*30)
+        print("-"*30 + " neuron_mm mlp " + "-"*30)
+
 
         # up = self.up_u_proj(self.up_v_proj(x))
         # gate = self.gate_u_proj(self.gate_v_proj(x))
         # return self.down_u_proj(self.down_v_proj(self.act_fn(gate) * up))
         
-        b, s, h = x.shape
-        x = x.view(-1, h)
-        # return nki_mm(x, self.up_v_proj.weight, self.up_u_proj.weight, 
-        #      self.gate_v_proj.weight, self.gate_u_proj.weight,
-        #      self.down_v_proj.weight, self.down_u_proj.weight)
-    
+        if self.tp_degree > 1:
+            # logger.info("-"*30 + " ENABLE_TP " + "-"*30)
+            # print("-"*30 + " ENABLE_TP " + "-"*30)
+            
+            # up = self.up_proj(x)
+            # gate = self.gate_proj(x)
+            # return self.down_proj(self.act_fn(gate) * up)
+        
+        ######################################################
+            print("-"*30 + " ENABLE_TP " + "-"*30)
 
-        result = svd_mlp_with_fused_kernel(
-            x, self.up_v_proj.weight.t(), self.up_u_proj.weight.t(), 
-            self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t(),  
-            self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
-        return result
+            S = x.shape[0]  # Get sequence length
+            
+            
+            # Use custom parameters if provided, otherwise use auto-selected parameters
+            
+            up_T_params = get_fused_mlp_up_T_params(S)
+            XTUV_params = get_fused_three_mm_XTUV_params(S)
+            
+            # Calculate 'gate' projection. SiLU is applied inside the kernel.
+            # Input: x (S, H). Output: activated_gate_t (I, S)
+            b, s, h = x.shape
+            x = x.view(-1, h)
+            # print("b, s, h: ", b, s, h)
+    
+            activated_gate_t = fused_mlp_up_T(
+                x,  self.gate_proj.weight_u.t(), self.gate_proj.weight_v.t(), self.up_proj.weight_u.t(), self.up_proj.weight_v.t(), **up_T_params
+            )
+            
+            # print("activated_gate_t.shape: ", activated_gate_t.shape)
+            output = self.down_proj(activated_gate_t)
+            output = output.reshape(b, s, h)
+            
+            
+            
+            # # --- Down Projection ---
+            
+            # output = fused_three_mm_XTUV(
+            #     activated_gate_t, self.down_proj.weight_u.t(), self.down_proj.weight_v.t(), **XTUV_params
+            # )
+            # output = output.reshape(b, s, h)
+            
+
+            return output
+    
+        
+        
+        else:
+            logger.info("-"*30 + " No ENABLE_TP " + "-"*30)
+            b, s, h = x.shape
+            if s != 1:
+                x = x.view(-1, h)
+                # return nki_mm(x, self.up_v_proj.weight, self.up_u_proj.weight, 
+                #      self.gate_v_proj.weight, self.gate_u_proj.weight,
+                #      self.down_v_proj.weight, self.down_u_proj.weight)
+            
+
+                result = svd_mlp_with_fused_kernel(
+                    x, self.up_v_proj.weight.t(), self.up_u_proj.weight.t(), 
+                    self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t(),  
+                    self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
+                return result
+            
+            else:
+                # print("x.shape: ", x.shape) #torch.Size([1, 1, 2048])
+                # print("self.up_v_proj.weight.shape: ", self.up_v_proj.weight.shape) #torch.Size([1280, 2048])
+                # print("self.up_u_proj.shape: ", self.up_u_proj.weight.shape) #torch.Size([8192, 1280])
+                # print("self.gate_v_proj.shape: ", self.gate_v_proj.weight.shape) #torch.Size([1280, 2048])
+                # print("self.gate_u_proj.shape: ", self.gate_u_proj.weight.shape) #torch.Size([8192, 1280])
+                # print("self.down_v_proj.shape: ", self.down_v_proj.weight.shape) #torch.Size([1280, 8192])
+                # print("self.down_u_proj.shape: ", self.down_u_proj.weight.shape) #torch.Size([2048, 1280])
+                
+                gate_proj_output = torch.einsum('...m,mn,nk->...k', x,self.gate_v_proj.weight.t(), self.gate_u_proj.weight.t())
+                up_proj_output = torch.einsum('...m,mn,nk->...k', x,self.up_v_proj.weight.t(), self.up_u_proj.weight.t())
+                down_proj_input = self.act_fn(gate_proj_output) * up_proj_output
+                output = torch.einsum('...m,mn,nk->...k', down_proj_input, self.down_v_proj.weight.t(), self.down_u_proj.weight.t())
+
+
+
+            return output
     
     def _svd_baseline(self, x):
         logger.info("-"*30 + " svd baseline mlp " + "-"*30)
@@ -1698,11 +2801,11 @@ class NeuronLlamaMLP_SVD(nn.Module):
         return output
 
     
-    def _svd_flash_mlp(self, x):
+    # def _svd_flash_mlp(self, x):
 
-        logger.info("-"*30 + " svd-flash mlp " + "-"*30)
-        b, s, h = x.shape
-        return XUV_matmul(x.view(-1, h), self.up_v_proj.weight, self.up_u_proj.weight)  # TODO: Fix tiles padding
+    #     logger.info("-"*30 + " svd-flash mlp " + "-"*30)
+    #     b, s, h = x.shape
+    #     return XUV_matmul(x.view(-1, h), self.up_v_proj.weight, self.up_u_proj.weight)  # TODO: Fix tiles padding
 
 
     def forward(self, x, rmsnorm=None, residual=None, adapter_ids=None):
@@ -1723,12 +2826,14 @@ class NeuronLlamaMLP_SVD(nn.Module):
             return self._kernel_enabled_mlp(x, rmsnorm, residual, adapter_ids=adapter_ids)
         else:
             # No kernel
-            assert rmsnorm is None and residual is None
+            # assert rmsnorm is None and residual is None
             # return (self._native_mlp(x, adapter_ids=adapter_ids), None)
 
-            return (self._neuron_mm(x), None)
+            return (self._neuron_mm(x), residual)
             # return (self._svd_baseline(x), None)
 
+
+#################################################
 
 ##################################################
 
@@ -2813,6 +3918,135 @@ class NeuronLlamaModel(NeuronBaseModel):
         self.attention_chunk_size = getattr(config, "attention_chunk_size", None)
 
 
+# class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
+#     """
+#     This class extends LlamaForCausalLM create traceable
+#     blocks for Neuron.
+
+#     Args:
+#         LlamaForCausalLM (_type_): _description_
+#     """
+
+#     _model_cls = NeuronLlamaModel
+
+#     @staticmethod
+#     def load_hf_model(model_path, **kwargs):
+#         return LlamaForCausalLM.from_pretrained(model_path, **kwargs)
+
+#     @staticmethod
+#     def convert_hf_to_neuron_state_dict(state_dict: dict, config: InferenceConfig) -> dict:
+#         """This function should be over-ridden in child classes as needed"""
+
+#         neuron_config = config.neuron_config
+#         # to facilitate rank usage in attention
+#         num_layers = config.num_hidden_layers
+#         tp_degree = neuron_config.tp_degree
+#         for i in range(num_layers):
+#             state_dict[f"layers.{i}.self_attn.rank_util.rank"] = torch.arange(
+#                 0, tp_degree // neuron_config.cp_degree, dtype=torch.int32
+#             )
+#             state_dict[f"layers.{i}.self_attn.global_rank.rank"] = torch.arange(
+#                 0, neuron_config.world_size, dtype=torch.int32
+#             )
+
+#             """
+#             for every layer do the following transformations
+#             gate_w_prime = (gate_w.T * gamma).T
+#             up_w_prime = (up_w.T * gamma).T
+#             """
+#             if (
+#                 neuron_config.fused_rmsnorm_skip_gamma
+#                 and not neuron_config.sequence_parallel_enabled
+#             ):
+#                 if neuron_config.mlp_kernel_enabled:
+#                     # MLP
+#                     state_dict[f"layers.{i}.mlp.gate_proj.weight"] = state_dict[
+#                         f"layers.{i}.mlp.gate_proj.weight"
+#                     ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+#                     state_dict[f"layers.{i}.mlp.up_proj.weight"] = state_dict[
+#                         f"layers.{i}.mlp.up_proj.weight"
+#                     ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+
+#                 if neuron_config.qkv_kernel_enabled:
+#                     # QKV
+#                     state_dict[f"layers.{i}.self_attn.q_proj.weight"] = state_dict[
+#                         f"layers.{i}.self_attn.q_proj.weight"
+#                     ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+#                     state_dict[f"layers.{i}.self_attn.k_proj.weight"] = state_dict[
+#                         f"layers.{i}.self_attn.k_proj.weight"
+#                     ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+#                     state_dict[f"layers.{i}.self_attn.v_proj.weight"] = state_dict[
+#                         f"layers.{i}.self_attn.v_proj.weight"
+#                     ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+
+#         if neuron_config.fused_qkv:
+#             state_dict = convert_state_dict_to_fused_qkv(state_dict, config)
+
+#         if neuron_config.vocab_parallel:
+#             # TODO: this hack can be removed after replication_id is ready to use
+#             state_dict["embed_tokens.rank_util.rank"] = torch.arange(
+#                 0, neuron_config.local_ranks_size, dtype=torch.int32
+#             )
+
+#         # to facilitate rank usage in base model
+#         state_dict["rank_util.rank"] = torch.arange(0, tp_degree, dtype=torch.int32)
+#         # print(state_dict.keys())
+#         return state_dict
+
+#     @staticmethod
+#     def update_state_dict_for_tied_weights(state_dict):
+#         # print(self.config.metadata)
+#         print(list(state_dict.keys()))
+#         state_dict["lm_head.weight"] = state_dict["embed_tokens.weight"].clone()
+#         # state_dict["embed_tokens.weight"] = state_dict["lm_head.weight"].clone()
+
+#     @classmethod
+#     def get_config_cls(cls):
+#         return LlamaInferenceConfig
+
+
+
+def add_state_dict_for_mlp(llama_state_dict, cfg: InferenceConfig):
+    """
+    This function concats the qkv weights to a Wqkv weight for fusedqkv, and deletes the qkv weights.
+    """
+    tp_size = cfg.neuron_config.tp_degree
+    for l in range(cfg.num_hidden_layers):  # noqa: E741
+        # dummpy_concat = torch.cat(
+        #     [
+        #         llama_state_dict[f"layers.{l}.mlp.gate_proj.weight"],
+        #         llama_state_dict[f"layers.{l}.mlp.up_proj.weight"],
+        #     ],
+        # )
+        # hidden = llama_state_dict[f"layers.{l}.mlp.gate_proj.weight"].shape[0]
+        # per_tp_output = hidden // tp_size
+        # output = torch.zeros_like(dummpy_concat)
+        # for i in range(tp_size):
+        #     output[2 * i * per_tp_output : (2 * i + 1) * per_tp_output,:] = llama_state_dict[f"layers.{l}.mlp.gate_proj.weight"][i * per_tp_output : (i + 1) * per_tp_output,:]
+        #     output[(2 * i + 1) * per_tp_output : (2 * i + 2) * per_tp_output,:] = llama_state_dict[f"layers.{l}.mlp.up_proj.weight"][i * per_tp_output : (i + 1) * per_tp_output,:]
+        # llama_state_dict[f"layers.{l}.mlp.gateup.weight"] = output
+        # del llama_state_dict[f"layers.{l}.mlp.gate_proj.weight"]
+        # del llama_state_dict[f"layers.{l}.mlp.up_proj.weight"]
+        # del dummpy_concat
+        
+        llama_state_dict[f"layers.{l}.mlp.gate_proj.weight_u"] = llama_state_dict[f"layers.{l}.mlp.gate_v_proj.weight"]
+        llama_state_dict[f"layers.{l}.mlp.gate_proj.weight_v"] = llama_state_dict[f"layers.{l}.mlp.gate_u_proj.weight"]
+        llama_state_dict[f"layers.{l}.mlp.up_proj.weight_u"] = llama_state_dict[f"layers.{l}.mlp.up_v_proj.weight"]
+        llama_state_dict[f"layers.{l}.mlp.up_proj.weight_v"] = llama_state_dict[f"layers.{l}.mlp.up_u_proj.weight"]
+        llama_state_dict[f"layers.{l}.mlp.down_proj.weight_u"] = llama_state_dict[f"layers.{l}.mlp.down_v_proj.weight"]
+        llama_state_dict[f"layers.{l}.mlp.down_proj.weight_v"] = llama_state_dict[f"layers.{l}.mlp.down_u_proj.weight"]
+        
+        del  llama_state_dict[f"layers.{l}.mlp.gate_v_proj.weight"]
+        del  llama_state_dict[f"layers.{l}.mlp.gate_u_proj.weight"]
+        del  llama_state_dict[f"layers.{l}.mlp.up_v_proj.weight"]
+        del  llama_state_dict[f"layers.{l}.mlp.up_u_proj.weight"]
+        del  llama_state_dict[f"layers.{l}.mlp.down_v_proj.weight"]
+        del  llama_state_dict[f"layers.{l}.mlp.down_u_proj.weight"]
+
+    gc.collect()
+    print(llama_state_dict.keys())
+    return llama_state_dict
+
 class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
     """
     This class extends LlamaForCausalLM create traceable
@@ -2828,64 +4062,91 @@ class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
     def load_hf_model(model_path, **kwargs):
         return LlamaForCausalLM.from_pretrained(model_path, **kwargs)
 
+    # @staticmethod
+    # def convert_hf_to_neuron_state_dict(state_dict: dict, config: InferenceConfig) -> dict:
+    #     """This function should be over-ridden in child classes as needed"""
+
+    #     neuron_config = config.neuron_config
+    #     # to facilitate rank usage in attention
+    #     num_layers = config.num_hidden_layers
+    #     tp_degree = neuron_config.tp_degree
+    #     for i in range(num_layers):
+    #         state_dict[f"layers.{i}.self_attn.rank_util.rank"] = torch.arange(
+    #             0, tp_degree // neuron_config.cp_degree, dtype=torch.int32
+    #         )
+    #         state_dict[f"layers.{i}.self_attn.global_rank.rank"] = torch.arange(
+    #             0, neuron_config.world_size, dtype=torch.int32
+    #         )
+
+    #         """
+    #         for every layer do the following transformations
+    #         gate_w_prime = (gate_w.T * gamma).T
+    #         up_w_prime = (up_w.T * gamma).T
+    #         """
+    #         if (
+    #             neuron_config.fused_rmsnorm_skip_gamma
+    #             and not neuron_config.sequence_parallel_enabled
+    #         ):
+    #             if neuron_config.mlp_kernel_enabled:
+    #                 # MLP
+    #                 state_dict[f"layers.{i}.mlp.gate_proj.weight"] = state_dict[
+    #                     f"layers.{i}.mlp.gate_proj.weight"
+    #                 ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+    #                 state_dict[f"layers.{i}.mlp.up_proj.weight"] = state_dict[
+    #                     f"layers.{i}.mlp.up_proj.weight"
+    #                 ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+
+    #             if neuron_config.qkv_kernel_enabled:
+    #                 # QKV
+    #                 state_dict[f"layers.{i}.self_attn.q_proj.weight"] = state_dict[
+    #                     f"layers.{i}.self_attn.q_proj.weight"
+    #                 ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+    #                 state_dict[f"layers.{i}.self_attn.k_proj.weight"] = state_dict[
+    #                     f"layers.{i}.self_attn.k_proj.weight"
+    #                 ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+    #                 state_dict[f"layers.{i}.self_attn.v_proj.weight"] = state_dict[
+    #                     f"layers.{i}.self_attn.v_proj.weight"
+    #                 ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
+
+    #     if neuron_config.fused_qkv:
+    #         state_dict = convert_state_dict_to_fused_qkv(state_dict, config)
+
+    #     if neuron_config.vocab_parallel:
+    #         # TODO: this hack can be removed after replication_id is ready to use
+    #         state_dict["embed_tokens.rank_util.rank"] = torch.arange(
+    #             0, neuron_config.local_ranks_size, dtype=torch.int32
+    #         )
+
+    #     # to facilitate rank usage in base model
+    #     state_dict["rank_util.rank"] = torch.arange(0, tp_degree, dtype=torch.int32)
+    #     # print(state_dict.keys())
+    #     return state_dict
+    
     @staticmethod
     def convert_hf_to_neuron_state_dict(state_dict: dict, config: InferenceConfig) -> dict:
         """This function should be over-ridden in child classes as needed"""
-
         neuron_config = config.neuron_config
+        if neuron_config.fused_qkv:
+            state_dict = convert_state_dict_to_fused_qkv(state_dict, config)
+            
+        if config.neuron_config.tp_degree > 1 and config.metadata["svd_llama"] is True:
+            state_dict = add_state_dict_for_mlp(state_dict, config)
+
+        if neuron_config.vocab_parallel:
+            # TODO: this hack can be removed after replication_id is ready to use
+            state_dict["embed_tokens.rank_util.rank"] = torch.arange(
+                0, neuron_config.local_ranks_size
+            )
+
         # to facilitate rank usage in attention
         num_layers = config.num_hidden_layers
         tp_degree = neuron_config.tp_degree
         for i in range(num_layers):
             state_dict[f"layers.{i}.self_attn.rank_util.rank"] = torch.arange(
-                0, tp_degree // neuron_config.cp_degree, dtype=torch.int32
+                0, tp_degree, dtype=torch.int32
             )
-            state_dict[f"layers.{i}.self_attn.global_rank.rank"] = torch.arange(
-                0, neuron_config.world_size, dtype=torch.int32
-            )
-
-            """
-            for every layer do the following transformations
-            gate_w_prime = (gate_w.T * gamma).T
-            up_w_prime = (up_w.T * gamma).T
-            """
-            if (
-                neuron_config.fused_rmsnorm_skip_gamma
-                and not neuron_config.sequence_parallel_enabled
-            ):
-                if neuron_config.mlp_kernel_enabled:
-                    # MLP
-                    state_dict[f"layers.{i}.mlp.gate_proj.weight"] = state_dict[
-                        f"layers.{i}.mlp.gate_proj.weight"
-                    ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
-                    state_dict[f"layers.{i}.mlp.up_proj.weight"] = state_dict[
-                        f"layers.{i}.mlp.up_proj.weight"
-                    ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
-
-                if neuron_config.qkv_kernel_enabled:
-                    # QKV
-                    state_dict[f"layers.{i}.self_attn.q_proj.weight"] = state_dict[
-                        f"layers.{i}.self_attn.q_proj.weight"
-                    ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
-                    state_dict[f"layers.{i}.self_attn.k_proj.weight"] = state_dict[
-                        f"layers.{i}.self_attn.k_proj.weight"
-                    ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
-                    state_dict[f"layers.{i}.self_attn.v_proj.weight"] = state_dict[
-                        f"layers.{i}.self_attn.v_proj.weight"
-                    ] * state_dict[f"layers.{i}.input_layernorm.weight"].unsqueeze(0)
-
-        if neuron_config.fused_qkv:
-            state_dict = convert_state_dict_to_fused_qkv(state_dict, config)
-
-        if neuron_config.vocab_parallel:
-            # TODO: this hack can be removed after replication_id is ready to use
-            state_dict["embed_tokens.rank_util.rank"] = torch.arange(
-                0, neuron_config.local_ranks_size, dtype=torch.int32
-            )
-
         # to facilitate rank usage in base model
         state_dict["rank_util.rank"] = torch.arange(0, tp_degree, dtype=torch.int32)
-        # print(state_dict.keys())
         return state_dict
 
     @staticmethod
@@ -2898,3 +4159,4 @@ class NeuronLlamaForCausalLM(NeuronBaseForCausalLM):
     @classmethod
     def get_config_cls(cls):
         return LlamaInferenceConfig
+  
