@@ -13,3 +13,17 @@ neuronxcc-*
 *.safetensors
 *vscode
 
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual env
+venv/
+.env/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store

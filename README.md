@@ -21,16 +21,16 @@
     source ~/.bashrc
     ```
 
-3. Download `Llama-3.2-1B` from Hugging face
+3. Download repo and `Llama-3.2-1B` from Hugging face
     ``` 
-    mkdir models
+    git clone https://github.com/dinghongsong/NeuronMM.git
 
-    huggingface-cli download --token  <your_hf_token> meta-llama/Llama-3.2-1B --local-dir ./models/llama-3.2-1b
+    huggingface-cli download --token  <your_hf_token> meta-llama/Llama-3.2-1B --local-dir /home/ubuntu/models/llama-3.2-1b
     ``` 
 
 4. Download the weights after SVD and post-training processing.
    ```
-    huggingface-cli download Macro2017/llama-3.2-1b_0.8_svd --local-dir ./models/llama-3.2-1b_0.8_svd
+    huggingface-cli download Macro2017/llama-3.2-1b_0.8_svd --local-dir /home/ubuntu/models/llama-3.2-1b_0.8_svd
    ```
 
 
