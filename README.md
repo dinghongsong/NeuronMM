@@ -6,7 +6,7 @@
 
 1. Launch a Tranium instance using [AWS EC2](https://us-west-2.console.aws.amazon.com/ec2/home?region=us-west-2#LaunchInstances:) with the following settings:  
    i. **Name and tags**: SVD-Flash  
-   ii. **Amazon Machine Image**: Deep Learning AMI Neuron (Ubuntu 24.04)  
+   ii. **Amazon Machine Image**: Deep Learning AMI Neuron (Ubuntu 22.04)  
    iii. **Instance type**: trn1.2xlarge  
    iv. **Key pair (login)**: create a new key pair  
    v. **Metadata version [under “Advanced details”]**: V2 only (otherwise, you will encounter a not authorized error)  
@@ -16,7 +16,7 @@
 
 2. Activate the Neuron virtual environment
     ```
-    echo 'source /opt/aws_neuronx_venv_pytorch_2_9_nxd_inference/bin/activate' | sudo tee -a ~/.bashrc
+    echo 'source /opt/aws_neuronx_venv_pytorch_2_7_nxd_inference/bin/activate' | sudo tee -a ~/.bashrc
 
     source ~/.bashrc
     ```
@@ -27,6 +27,7 @@
 
     huggingface-cli download --token  <your_hf_token> meta-llama/Llama-3.2-1B --local-dir /home/ubuntu/models/llama-3.2-1b
     ``` 
+    <!-- LOtCtkFzOLFrdTfOTJAzJArYNtRdSCCqhp -->
 
 4. Download the weights after SVD and post-training processing.
    ```
