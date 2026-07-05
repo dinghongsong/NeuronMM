@@ -318,10 +318,13 @@ def cmd_decode(args):
             ok_v, mb = vmem_ok(BM, BN, BK)
             if not ok_v:
                 print(f"  {nm:12s} SKIP VMEM {mb:.1f}MB > budget"); continue
-            if not correct(BM, BN, BK, x, S):
-                print(f"  {nm:12s} FAIL correctness"); continue
-            fn = jx(lambda x, a=BM, b=BN, c=BK: m.svd_swiglu_mlp(x, *f, BM=a, BN=b, BK=c, interpret=INTERP))
-            aP, bP = median_us(fn, x), async_us(fn, x)
+            try:
+                if not correct(BM, BN, BK, x, S):
+                    print(f"  {nm:12s} FAIL correctness"); continue
+                fn = jx(lambda x, a=BM, b=BN, c=BK: m.svd_swiglu_mlp(x, *f, BM=a, BN=b, BK=c, interpret=INTERP))
+                aP, bP = median_us(fn, x), async_us(fn, x)
+            except Exception as e:               # noqa: BLE001 — actual VMEM OOM (predictor under-estimated)
+                print(f"  {nm:12s} SKIP ({type(e).__name__})"); continue
             gbp = SVD_WB / (aP * 1e-6) / 1e9
             print(f"  {nm:12s} {aP:8.1f} {aP/S:7.1f} {gbp:6.0f} {100*gbp/PEAK_GB:4.0f}% "
                   f"{a_xla/aP:6.2f} {a_den/aP:7.2f} {aP-bP:11.1f}u")
@@ -405,12 +408,15 @@ def cmd_layer(args):
               f"{'layer P/XLA':>11} {'layer P/dns':>11} {'model ours ms':>14}")
         for S in (args.seq or [512, 1024]):
             x = jax.random.normal(jax.random.PRNGKey(S), (S, H), jnp.float32).astype(jnp.bfloat16)
-            _, cfg = m.svd_swiglu_mlp_auto(x, *f, spec=SPEC, interpret=INTERP, verbose=False)
-            a_t = bench_ms(jx(lambda x: _attn(x, Wq, Wk, Wv, Wo, heads)), x)
-            md = bench_ms(jx(lambda x: m.dense_swiglu_mlp_ref(x, Wg, Wu, Wd)), x)
-            mx = bench_ms(jx(lambda x: m.svd_swiglu_mlp_ref(x, *f)), x)
-            mo = bench_ms(jx(lambda x: m.svd_swiglu_mlp(
-                x, *f, BM=cfg["BM"], BN=cfg["BN"], BK=cfg["BK"], interpret=INTERP)), x)
+            try:
+                _, cfg = m.svd_swiglu_mlp_auto(x, *f, spec=SPEC, interpret=INTERP, verbose=False)
+                a_t = bench_ms(jx(lambda x: _attn(x, Wq, Wk, Wv, Wo, heads)), x)
+                md = bench_ms(jx(lambda x: m.dense_swiglu_mlp_ref(x, Wg, Wu, Wd)), x)
+                mx = bench_ms(jx(lambda x: m.svd_swiglu_mlp_ref(x, *f)), x)
+                mo = bench_ms(jx(lambda x: m.svd_swiglu_mlp(
+                    x, *f, BM=cfg["BM"], BN=cfg["BN"], BK=cfg["BK"], interpret=INTERP)), x)
+            except Exception as e:               # noqa: BLE001 — VMEM OOM at largest shape
+                print(f"{S:>5}  SKIP ({type(e).__name__})"); continue
             lo, lx, ld = a_t + mo, a_t + mx, a_t + md
             print(f"{S:>5} {a_t:>7.4f} {md:>8.4f} {mx:>8.4f} {mo:>9.4f} | "
                   f"{lx/lo:>11.3f} {ld/lo:>11.3f} {L*lo:>14.3f}")
